@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="812" viewBox="0 0 1000 812" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="Rory system architecture: five layers from interface down to external services, with a trust boundary above external side effects.">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#4B5563" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect width="1000" height="812" fill="#FFFFFF"/>
+
+<text x="60" y="46" font-size="23" font-weight="600" fill="#111827">Rory — System Architecture</text>
+<text x="60" y="70" font-size="13.5" fill="#6B7280">Decoupled voice agent · V1</text>
+
+<rect x="60" y="88" width="880" height="104" rx="12" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="1.2"/>
+<text x="500" y="112" font-size="14" font-weight="600" fill="#374151" text-anchor="middle">Interface layer</text>
+<rect x="90" y="124" width="390" height="52" rx="8" fill="#FFF3E0" stroke="#F0A34A" stroke-width="1.2"/>
+<text x="285" y="145" font-size="15" font-weight="600" fill="#7A4A0F" text-anchor="middle">Desktop widget (PySide6)</text>
+<text x="285" y="163" font-size="12" fill="#9A6620" text-anchor="middle">5 UI states · click to talk</text>
+<rect x="520" y="124" width="390" height="52" rx="8" fill="#FFF3E0" stroke="#F0A34A" stroke-width="1.2"/>
+<text x="715" y="145" font-size="15" font-weight="600" fill="#7A4A0F" text-anchor="middle">Text CLI</text>
+<text x="715" y="163" font-size="12" fill="#9A6620" text-anchor="middle">same core · primary dev loop</text>
+
+<line x1="285" y1="192" x2="285" y2="210" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="715" y1="192" x2="715" y2="344" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="727" y="272" font-size="12" fill="#6B7280">text only · bypasses audio</text>
+
+<rect x="60" y="214" width="600" height="104" rx="12" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="1.2"/>
+<text x="360" y="238" font-size="14" font-weight="600" fill="#374151" text-anchor="middle">Voice layer</text>
+<rect x="85" y="250" width="170" height="52" rx="8" fill="#F3E8FF" stroke="#A78BFA" stroke-width="1.2"/>
+<text x="170" y="271" font-size="15" font-weight="600" fill="#4C1D95" text-anchor="middle">Audio I/O</text>
+<text x="170" y="289" font-size="12" fill="#6D28D9" text-anchor="middle">sounddevice · 16 kHz</text>
+<rect x="275" y="250" width="170" height="52" rx="8" fill="#F3E8FF" stroke="#A78BFA" stroke-width="1.2"/>
+<text x="360" y="271" font-size="15" font-weight="600" fill="#4C1D95" text-anchor="middle">Speech to text</text>
+<text x="360" y="289" font-size="12" fill="#6D28D9" text-anchor="middle">Sarvam Saaras</text>
+<rect x="465" y="250" width="170" height="52" rx="8" fill="#F3E8FF" stroke="#A78BFA" stroke-width="1.2"/>
+<text x="550" y="271" font-size="15" font-weight="600" fill="#4C1D95" text-anchor="middle">Text to speech</text>
+<text x="550" y="289" font-size="12" fill="#6D28D9" text-anchor="middle">Sarvam Bulbul · cached</text>
+
+<line x1="360" y1="318" x2="360" y2="344" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+
+<rect x="60" y="348" width="880" height="176" rx="12" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="1.2"/>
+<text x="500" y="372" font-size="14" font-weight="600" fill="#374151" text-anchor="middle">Agent core — text only</text>
+<rect x="90" y="386" width="820" height="52" rx="8" fill="#E3F0FC" stroke="#5B9BD5" stroke-width="1.2"/>
+<text x="500" y="407" font-size="15" font-weight="600" fill="#10406B" text-anchor="middle">RoryCore — session facade</text>
+<text x="500" y="425" font-size="12" fill="#1F5C96" text-anchor="middle">turn id · conversation history · structured tracing</text>
+<line x1="500" y1="438" x2="500" y2="456" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="90" y="458" width="820" height="52" rx="8" fill="#E3F0FC" stroke="#5B9BD5" stroke-width="1.2"/>
+<text x="500" y="479" font-size="15" font-weight="600" fill="#10406B" text-anchor="middle">Agent loop — tool calling</text>
+<text x="500" y="497" font-size="12" fill="#1F5C96" text-anchor="middle">max 4 iterations · dispatch and re-prompt</text>
+
+<line x1="215" y1="524" x2="215" y2="544" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="500" y1="524" x2="500" y2="544" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="785" y1="524" x2="785" y2="544" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+
+<rect x="60" y="546" width="880" height="104" rx="12" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="1.2"/>
+<text x="500" y="570" font-size="14" font-weight="600" fill="#374151" text-anchor="middle">Capability layer</text>
+<rect x="80" y="582" width="270" height="52" rx="8" fill="#E6F7F0" stroke="#4FB08A" stroke-width="1.2"/>
+<text x="215" y="603" font-size="15" font-weight="600" fill="#0B4A38" text-anchor="middle">LLM client</text>
+<text x="215" y="621" font-size="12" fill="#15705A" text-anchor="middle">provider Protocol · swappable</text>
+<rect x="365" y="582" width="270" height="52" rx="8" fill="#E6F7F0" stroke="#4FB08A" stroke-width="1.2"/>
+<text x="500" y="603" font-size="15" font-weight="600" fill="#0B4A38" text-anchor="middle">Tool registry</text>
+<text x="500" y="621" font-size="12" fill="#15705A" text-anchor="middle">schema · validate · dispatch</text>
+<rect x="650" y="582" width="270" height="52" rx="8" fill="#E6F7F0" stroke="#4FB08A" stroke-width="1.2"/>
+<text x="785" y="603" font-size="15" font-weight="600" fill="#0B4A38" text-anchor="middle">Retriever</text>
+<text x="785" y="621" font-size="12" fill="#15705A" text-anchor="middle">embed · cosine · top-k</text>
+
+<line x1="215" y1="650" x2="215" y2="670" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="500" y1="650" x2="500" y2="670" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="785" y1="650" x2="785" y2="670" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="60" y1="661" x2="940" y2="661" stroke="#DC2626" stroke-width="1.1" stroke-dasharray="6 5"/>
+<rect x="300" y="648" width="116" height="17" fill="#FFFFFF"/>
+<text x="358" y="661" font-size="12" font-weight="600" fill="#B91C1C" text-anchor="middle">Trust boundary</text>
+
+<rect x="60" y="672" width="880" height="104" rx="12" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="1.2"/>
+<text x="500" y="696" font-size="14" font-weight="600" fill="#374151" text-anchor="middle">External services &amp; data</text>
+<rect x="80" y="708" width="270" height="52" rx="8" fill="#F1F2F4" stroke="#9CA3AF" stroke-width="1.2"/>
+<text x="215" y="729" font-size="15" font-weight="600" fill="#1F2937" text-anchor="middle">Cloud LLM</text>
+<text x="215" y="747" font-size="12" fill="#4B5563" text-anchor="middle">Gemini Flash</text>
+<rect x="365" y="708" width="270" height="52" rx="8" fill="#F1F2F4" stroke="#9CA3AF" stroke-width="1.2"/>
+<text x="500" y="729" font-size="15" font-weight="600" fill="#1F2937" text-anchor="middle">Desktop / OS</text>
+<text x="500" y="747" font-size="12" fill="#4B5563" text-anchor="middle">subprocess · psutil · whitelist</text>
+<rect x="650" y="708" width="270" height="52" rx="8" fill="#F1F2F4" stroke="#9CA3AF" stroke-width="1.2"/>
+<text x="785" y="729" font-size="15" font-weight="600" fill="#1F2937" text-anchor="middle">Knowledge &amp; index</text>
+<text x="785" y="747" font-size="12" fill="#4B5563" text-anchor="middle">markdown · NumPy .npz</text>
+</svg>
