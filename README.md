@@ -1,6 +1,6 @@
 # Rory - My Personal AI Voice Assistant 
 
-##What is Rory?
+## What is Rory?
 
 > A character from my favorite show, Gilmore Girls. 
 #### (just kidding)
@@ -31,4 +31,8 @@
 - [Future Scope](#future-scope)
 
 ## What actually is rory? 
+
+Rory is a personal, voice-first AI agent that combines **Speech-to-Text, LLM-based reasoning, RAG,memory, and controlled tool execution** to understand personal context, respond naturally, and interact with my Linux desktop.
+
+The system follows a modular **STT → LLM → TTS** architecture, with RAG and memory providing context and an explicit tool layer enabling desktop actions.
 
