@@ -1,4 +1,4 @@
-# Rory - My Personal AI Voice Assistant 
+# Rory - My Personal AI Voice Assistant
 
 ## What is Rory?
 
