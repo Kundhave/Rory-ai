@@ -95,4 +95,7 @@ def open_app(app: AppName) -> dict:
     code = process.poll()
     if code is not None and code != 0:
         return {"ok": False, "detail": f"{app} exited immediately with code {code}"}
-    return {"ok": True, "detail": f"launched {app}"}
+    # Deliberately "opened", not "launched": most apps delegate to an already
+    # running instance and exit 0, so a new process was not necessarily
+    # started. Not an error — but claiming a fresh launch would overstate it.
+    return {"ok": True, "detail": f"{app} is now open"}

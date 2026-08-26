@@ -8,11 +8,35 @@ stays inside the implementation.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Protocol, TypedDict
 
+import httpx
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+
+# One retry, not a retry storm. A 429 or a 5xx is usually transient, and the
+# free tier's per-minute quota in particular clears quickly — but a second
+# failure means something is actually wrong, and making the user wait through
+# a third attempt buys nothing over telling them honestly.
+LLM_ATTEMPTS = 2
+LLM_BACKOFF_S = 2.0
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """A connection error means the network is down — retrying just makes the
+    user wait longer for the same failure, so it fails fast. A timeout or a
+    server-side error is worth exactly one more try."""
+    if isinstance(exc, httpx.ConnectError):
+        return False
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, errors.ServerError):
+        return True
+    if isinstance(exc, errors.ClientError):
+        return exc.code == 429
+    return False
 
 
 class Message(TypedDict):
@@ -72,6 +96,23 @@ class GeminiLLM:
         messages: list[Message],
         system: str | None = None,
         tools: list[dict] | None = None,
+    ) -> LLMResponse:
+        for _ in range(LLM_ATTEMPTS - 1):
+            try:
+                return self._generate_once(messages, system, tools)
+            except Exception as exc:
+                if not _is_retryable(exc):
+                    raise
+                time.sleep(LLM_BACKOFF_S)
+        # Final attempt: whatever it raises is what the caller sees, which
+        # RoryCore turns into an honest Reply(error=...).
+        return self._generate_once(messages, system, tools)
+
+    def _generate_once(
+        self,
+        messages: list[Message],
+        system: str | None,
+        tools: list[dict] | None,
     ) -> LLMResponse:
         contents = [
             types.Content(role=_ROLE_MAP[m["role"]], parts=[types.Part.from_text(text=m["content"])])
