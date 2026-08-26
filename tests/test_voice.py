@@ -62,6 +62,33 @@ class CountingTTS:
         return self._audio_bytes
 
 
+def test_strip_markdown_removes_bold_italic_code_and_headers():
+    assert tts.strip_markdown("**CUSTOS**") == "CUSTOS"
+    assert tts.strip_markdown("*emphasis*") == "emphasis"
+    assert tts.strip_markdown("***very bold***") == "very bold"
+    assert tts.strip_markdown("__CUSTOS__") == "CUSTOS"
+    assert tts.strip_markdown("use `search_notes` for that") == "use search_notes for that"
+    assert tts.strip_markdown("# Heading\nBody text") == "Heading\nBody text"
+    assert tts.strip_markdown("- one\n- two") == "one\ntwo"
+
+
+def test_strip_markdown_leaves_ordinary_text_untouched():
+    text = "Relay uses exponential backoff for retries, 5 attempts total."
+    assert tts.strip_markdown(text) == text
+
+
+def test_cached_tts_strips_markdown_before_synthesizing_and_before_hashing(tmp_path):
+    underlying = CountingTTS()
+    cached = tts.CachedTTS(underlying, voice="local:default", cache_dir=tmp_path)
+
+    cached.synthesize("**CUSTOS** is a platform")
+    # A second call whose markdown-stripped form is identical must still hit
+    # the cache — the key is computed from the cleaned text.
+    cached.synthesize("CUSTOS is a platform")
+
+    assert underlying.calls == 1
+
+
 def test_cached_tts_does_not_recall_the_engine_on_a_hit(tmp_path):
     underlying = CountingTTS()
     cached = tts.CachedTTS(underlying, voice="local:default", cache_dir=tmp_path)
