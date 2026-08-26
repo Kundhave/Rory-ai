@@ -125,11 +125,25 @@ whether a turn started as text or speech.
    Speech input (STT) always needs this key regardless of `TTS_ENGINE`;
    there is no local fallback for STT. Set `TTS_ENGINE=sarvam` to use the
    real Bulbul voice for output too — pick a speaker with `TTS_VOICE`
-   (`anushka`, `manisha`, `vidya`, `abhilash`, `karun`, `hitesh`; try a few,
-   `espeak-ng --voices=en` also lists local voice options for `TTS_LOCAL_VOICE`).
-   If Sarvam fails for any reason (credit exhaustion, a server error, a
-   timeout), Rory automatically falls back to the local voice rather than
-   losing the turn's spoken answer.
+   (v3 female: `shreya`, `priya`, `ritu`, `kavya`, `ishita`; v3 male:
+   `shubh`, `aditya`, `rahul`, `varun`. `espeak-ng --voices=en` lists local
+   options for `TTS_LOCAL_VOICE`).
+   If Sarvam fails, Rory retries a few times and then falls back to the
+   local voice rather than losing the turn's spoken answer.
+
+   **Stay on `bulbul:v3` (the default).** Measured against the live API,
+   `bulbul:v2` succeeded on only 2 of 5 calls, with each failure hanging
+   ~30s before erroring and then degrading to the robotic local voice;
+   `bulbul:v3` succeeded 5 of 5 in ~2s. Speaker names are model-specific —
+   v2 names like `manisha` do not exist on v3. See ADR-014 in
+   `docs/DECISIONS.md`.
+
+   If speech ever sounds robotic, check which engine actually spoke:
+   ```bash
+   grep '"stage": "tts"' logs/trace.jsonl | tail -5
+   ```
+   `"engine": "primary"` is the real Sarvam voice; `"fallback"` means you
+   heard local espeak-ng because Sarvam failed.
 
 ### Using it
 

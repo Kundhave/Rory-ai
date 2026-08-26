@@ -92,7 +92,12 @@ def speak(tts: TTS, reply: Reply) -> None:
     started = time.monotonic()
     try:
         audio = tts.synthesize(reply.text)
-        trace.event("tts", (time.monotonic() - started) * 1000, chars=len(reply.text))
+        trace.event(
+            "tts",
+            (time.monotonic() - started) * 1000,
+            chars=len(reply.text),
+            engine=getattr(tts, "last_engine", None),
+        )
         play(audio)
     except Exception as exc:
         trace.event("tts_error", (time.monotonic() - started) * 1000, error=str(exc))

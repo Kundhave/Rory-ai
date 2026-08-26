@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     # not on first use" rule at the point where the dependency is real.
     sarvam_api_key: str | None = None
     tts_engine: Literal["sarvam", "local"] = "local"
-    tts_voice: str = "anushka"        # Sarvam Bulbul speaker name
+    # bulbul:v2 was measured at only 2/5 successful calls (failures hanging
+    # ~30s each) against v3's 5/5 at ~2s — hence v3 by default. Speaker names
+    # are model-specific: v2 names like "manisha" do not exist on v3.
+    tts_model: str = "bulbul:v3"
+    tts_voice: str = "shreya"          # Sarvam Bulbul speaker name
     tts_local_voice: str = "en-us+f3"  # espeak-ng voice id
 
 

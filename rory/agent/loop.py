@@ -8,6 +8,7 @@ covers without a second message format to normalise.
 from __future__ import annotations
 
 import json
+import re
 import time
 
 from rory.llm import LLM, Message, ToolCall
@@ -24,6 +25,19 @@ CAP_REACHED_TEXT = (
     "I kept going back and forth on that and stopped rather than spin. "
     "Could you try asking a different way?"
 )
+
+# Observed for real: Gemini occasionally writes a tool call out as plain text
+# (e.g. "default_api.search_notes(query=...)") instead of using the
+# structured function-calling channel — a model-side reliability lapse, not
+# something GeminiLLM.generate() can parse into a real ToolCall, since it
+# never arrives as a function_call part. Left unguarded, that text is
+# indistinguishable from a real answer and gets spoken to the user verbatim.
+# Detected precisely against the actual registered tool names (not a vague
+# "looks like code" heuristic) so a legitimate answer that happens to
+# mention a tool name in prose is never mistaken for a leak.
+def _looks_like_a_leaked_tool_call(text: str) -> bool:
+    names = "|".join(re.escape(t["name"]) for t in schemas())
+    return bool(re.search(rf"\b(?:\w+\.)?(?:{names})\s*\(", text))
 
 
 def run(
@@ -47,6 +61,19 @@ def run(
         )
 
         if not response.tool_calls:
+            if _looks_like_a_leaked_tool_call(response.text):
+                trace.event("tool_call_leak_detected", 0.0, text_len=len(response.text))
+                messages.append({"role": "assistant", "content": response.text})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "That wasn't a real answer — it looks like tool-call syntax written "
+                        "out as text instead of either calling the tool or answering normally. "
+                        "Please either call the tool properly, or give a plain spoken answer "
+                        "with no code or function-call syntax."
+                    ),
+                })
+                continue
             return response.text
 
         messages.append({"role": "assistant", "content": _render_calls(response.tool_calls)})
