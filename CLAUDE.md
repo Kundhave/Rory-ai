@@ -154,4 +154,4 @@ do not assume it's done:
   the current approach is insufficient, the proposed alternative, and the tradeoff.
   Get approval before changing it.
 - **A new dependency seems necessary.** Justify it and wait.
-- **The feature is ambiguous or larger than described.** Ask rather than guess.
+- **The feature is ambiguous or larger than described.** Ask rather than guess.s
