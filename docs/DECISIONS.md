@@ -448,3 +448,55 @@ presentation layer wrapping it did, confirmed by the untouched
 the new UI.
 
 **Date**: 2026-08-26
+
+---
+
+## ADR-014: Sarvam bulbul:v3 over bulbul:v2, and retry-before-degrade for TTS
+
+**Decision**: Sarvam TTS uses `bulbul:v3` (speaker `shreya`) rather than
+`bulbul:v2` (`manisha`); the per-request timeout is 5s rather than 60s; and
+`FallbackTTS` retries the primary engine up to 3 times before degrading to
+local espeak-ng.
+
+**Context**: Two user-visible symptoms — replies taking ~30s to speak, and
+the voice sometimes sounding robotic and noisy — turned out to share one
+root cause. Measurement against the live API:
+
+| model / speaker | success rate | timings |
+|---|---|---|
+| `bulbul:v2` / manisha | 2/5 | 1.2s, ✗30s, ✗30s, 1.1s, ✗30s |
+| `bulbul:v3` / shreya | 5/5 | 1.7–2.7s |
+
+`bulbul:v2` fails roughly half the time, and each failure hangs for ~30.3s
+before returning a 500 (Sarvam's own server-side timeout). Our 60s httpx
+timeout never fired, so every failure cost the full 30s — and then
+`FallbackTTS` degraded to espeak-ng, whose formant synthesis is the
+"noise" the user heard. So the 30s wait and the bad voice were the same bug
+observed from two angles.
+
+Successful calls barely scale with length (0.95s at 25 chars, 2.12s at 105,
+2.13s at 300), so success and failure are cleanly separated populations —
+which is what makes a short timeout safe.
+
+**Alternatives**: (a) Retry `bulbul:v2` harder — measured at 12s timeout ×
+3 attempts this still averaged 11.1s with 2/6 turns degrading to espeak-ng;
+it treats the symptom while staying on the broken model. (b) Hedged
+parallel requests (fire N, take the first success) — a real fix for this
+failure profile, but multiplies API cost and adds concurrency complexity
+for what turned out to be an unnecessary workaround once v3 was tested.
+(c) Accept the local voice as normal — rejected; it's audibly much worse
+and the user specifically objected to it.
+
+**Tradeoff**: Speaker names are model-specific, so moving to v3 meant giving
+up `manisha` (v2-only) and choosing a new voice. The retry and short timeout
+are kept anyway despite v3's reliability — they're cheap insurance for any
+future transient wobble, and cost nothing on the success path. Measured
+result: mean TTS latency 11.13s → 2.06s, max 15.68s → 2.94s, and zero
+degradations to the local voice across the verification run.
+
+`FallbackTTS.last_engine` was added alongside this and is logged to the
+trace, so "why does it sound bad?" is answerable from the trace file
+instead of being invisible — that ambiguity is what made this take two
+rounds to diagnose.
+
+**Date**: 2026-08-26

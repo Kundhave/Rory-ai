@@ -198,6 +198,88 @@ def test_fallback_tts_switches_to_local_on_a_timeout():
     assert local.calls == 1
 
 
+def test_fallback_tts_retries_the_primary_before_degrading_to_local():
+    # The measured real-world failure: Sarvam 500s transiently, then works
+    # on the next call. Retrying is what keeps the good voice instead of
+    # dropping to the audibly worse espeak-ng fallback.
+    request = httpx.Request("POST", "https://api.sarvam.ai/text-to-speech")
+    response = httpx.Response(500, request=request)
+
+    class FailsOnceThenWorks:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def synthesize(self, text: str) -> bytes:
+            self.calls += 1
+            if self.calls == 1:
+                raise httpx.HTTPStatusError("500", request=request, response=response)
+            return b"sarvam-audio"
+
+    primary = FailsOnceThenWorks()
+    local = CountingTTS(b"local-audio")
+    fallback = tts.FallbackTTS(primary=primary, fallback=local, attempts=3)
+
+    assert fallback.synthesize("hello there") == b"sarvam-audio"
+    assert primary.calls == 2
+    assert local.calls == 0  # never degraded
+    assert fallback.last_engine == "primary"
+
+
+def test_fallback_tts_gives_up_after_the_attempt_limit():
+    request = httpx.Request("POST", "https://api.sarvam.ai/text-to-speech")
+    response = httpx.Response(500, request=request)
+
+    class AlwaysFails:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def synthesize(self, text: str) -> bytes:
+            self.calls += 1
+            raise httpx.HTTPStatusError("500", request=request, response=response)
+
+    primary = AlwaysFails()
+    local = CountingTTS(b"local-audio")
+    fallback = tts.FallbackTTS(primary=primary, fallback=local, attempts=3)
+
+    assert fallback.synthesize("hello there") == b"local-audio"
+    assert primary.calls == 3
+    assert fallback.last_engine == "fallback"
+
+
+def test_credit_exhaustion_is_not_retried():
+    # A persistent condition — retrying only wastes the user's time.
+    class Exhausted:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def synthesize(self, text: str) -> bytes:
+            self.calls += 1
+            raise tts.SarvamCreditExhausted("402")
+
+    primary = Exhausted()
+    local = CountingTTS(b"local-audio")
+    fallback = tts.FallbackTTS(primary=primary, fallback=local, attempts=3)
+
+    assert fallback.synthesize("hello there") == b"local-audio"
+    assert primary.calls == 1
+
+
+def test_cached_tts_reports_the_engine_that_actually_spoke(tmp_path):
+    class Engine:
+        last_engine = "primary"
+
+        def synthesize(self, text: str) -> bytes:
+            return b"audio"
+
+    cached = tts.CachedTTS(Engine(), voice="sarvam:manisha", cache_dir=tmp_path)
+
+    cached.synthesize("hello there")
+    assert cached.last_engine == "primary"
+
+    cached.synthesize("hello there")  # served from disk this time
+    assert cached.last_engine == "cache"
+
+
 @pytest.mark.live
 def test_sarvam_tts_real_api_call():
     from rory.config import settings

@@ -142,7 +142,14 @@ class VoiceWorker(QObject):
                         audio = pool.submit(self._tts.synthesize, reply.text).result(timeout=TTS_TIMEOUT_S)
                     finally:
                         pool.shutdown(wait=False)
-                    trace.event("tts", (time.monotonic() - tts_started) * 1000, chars=len(reply.text))
+                    trace.event(
+                        "tts",
+                        (time.monotonic() - tts_started) * 1000,
+                        chars=len(reply.text),
+                        # Which engine actually spoke: "fallback" here means
+                        # the user heard the degraded local voice.
+                        engine=getattr(self._tts, "last_engine", None),
+                    )
                     self._player(audio)
                 except Exception as exc:
                     # The reply text already went out via reply_ready — a
