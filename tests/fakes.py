@@ -1,7 +1,27 @@
 """Deterministic, offline fakes for anything touching the agent loop."""
 from __future__ import annotations
 
+import zlib
+
+import numpy as np
+
 from rory.llm import LLMResponse, Message, TokenUsage, ToolCall
+
+FAKE_EMBED_DIM = 64
+
+
+class FakeEmbedder:
+    """Deterministic bag-of-words hashing embedder — no model download, no
+    network. Cosine similarity between two texts tracks their word overlap,
+    which is enough to exercise ranking and threshold logic without needing
+    real semantic embeddings."""
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        vectors = np.zeros((len(texts), FAKE_EMBED_DIM), dtype=np.float32)
+        for row, text in enumerate(texts):
+            for word in text.lower().split():
+                vectors[row, zlib.crc32(word.encode()) % FAKE_EMBED_DIM] += 1.0
+        return vectors
 
 
 def calls(*named_args: tuple[str, dict]) -> LLMResponse:

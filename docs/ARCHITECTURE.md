@@ -105,6 +105,80 @@ value the model could mistake for an answer. The grounding rules in
 `agent/prompts.py` tell it to report uncertainty when `verified` is false, but
 the *mechanism* is this envelope, not the prompt.
 
+## The RAG pipeline (Feature 3)
+
+```
+knowledge/*.md (gitignored, personal)
+        ↓  python -m rory.rag.ingest
+split_into_sections()   header-aware: one section per heading, full
+                         heading-path breadcrumb kept as metadata
+        ↓
+chunk_section()          ~300 words/chunk (≈400 tokens), 15% overlap
+                          for sections longer than one chunk
+        ↓
+Embedder.embed(texts)    FastEmbedder (fastembed, local, no network at
+                          query time)
+        ↓
+normalize()               L2-normalise so search is one matmul
+        ↓
+data/index.npz (vectors) + data/chunks.json (text + heading + source)
+                          both fully regenerable — delete and re-ingest
+
+query at runtime:
+  search_notes(query)  <- an ordinary @tool, dispatched through the same
+        ↓                  registry as open_app/check_app_running/get_datetime
+  embed query, normalize, vectors @ query_vector, top-K, filter < MIN_SCORE
+        ↓
+  {ok, results: [{source, heading, text, score}, ...]}   (possibly empty)
+```
+
+**`rory/rag/embed.py`** — the `Embedder` Protocol and `FastEmbedder`
+(`BAAI/bge-small-en-v1.5` via fastembed, 384-dim, local). See DECISIONS.md for
+why local rather than an embedding API.
+
+**`rory/rag/ingest.py`** — `split_into_sections` walks the markdown line by
+line, tracking a heading stack so a chunk under a level-3 heading still
+carries its level-1/level-2 ancestors (e.g. `PROJECTS.md > 2. Relay > Core
+Architecture`). `chunk_section` only splits a section that exceeds
+`CHUNK_WORDS`, with `OVERLAP_WORDS` shared between consecutive pieces so a
+fact near a boundary survives whole in at least one chunk. `README.md` is
+excluded — it documents the format, it isn't personal knowledge. Word count
+stands in for token count; there's no tokenizer in this project's
+dependencies, and getting chunk size roughly right matters more than getting
+it exactly right.
+
+**`rory/rag/retrieve.py`** — owns `MIN_SCORE` and does the actual search
+(`vectors @ query_vector`, since both sides are pre-normalised). It also
+defines `search_notes`, the fourth tool, decorated with the same `@tool` used
+by the desktop tools — there is no separate retrieval code path, no
+always-on pre-retrieval step run before the model sees a message. If the
+model doesn't ask, nothing is retrieved.
+
+### Why returning zero results is correct, not a bug
+
+`MIN_SCORE` was calibrated by hand against this knowledge base, not guessed:
+off-topic queries ("what's the capital of France") top out around 0.55
+cosine similarity against `bge-small`, genuinely relevant queries start
+around 0.65 even when loosely phrased. `MIN_SCORE = 0.58` sits in that gap.
+Below it, `search_notes` returns `results: []` rather than the
+nearest-but-irrelevant chunk — this is the mechanism (not a prompt
+instruction) that lets Rory say "that's not in my notes" instead of
+confabulating from whatever scored highest regardless of whether it was
+actually relevant.
+
+### The profile card is not retrieved
+
+`agent/prompts.py::PROFILE_CARD` is a small (~150 token) hand-written summary
+— name, current focus, top projects — sent on *every* turn regardless of
+whether `search_notes` fires or what it returns. Retrieval is precise but
+conditional: it only surfaces content for a query that scores above
+`MIN_SCORE`, so a turn that never calls `search_notes` (small talk, a
+desktop-tool request, a phrasing that doesn't match the notes' wording) would
+otherwise carry zero personal context. Core identity shouldn't be
+retrieval-dependent; everything more specific than the card (project
+internals, exact figures, brainstormed ideas) is left to `search_notes` on
+purpose, which is what keeps the card small enough to afford on every turn.
+
 ## Where state lives
 
 - Conversation history: in-memory, inside a `RoryCore` instance, bounded to
@@ -112,11 +186,80 @@ the *mechanism* is this envelope, not the prompt.
   process exits; there is no persistence in this feature.
 - Trace events: appended to `logs/trace.jsonl` (gitignored).
 - Configuration: `.env`, loaded once at import via `Settings`.
+- Knowledge base: `knowledge/*.md` (gitignored, personal, hand-written).
+- The retrieval index: `data/index.npz` + `data/chunks.json` (gitignored,
+  entirely derived from `knowledge/` — delete and re-run
+  `python -m rory.rag.ingest` at any time).
 
-## What's deliberately not here yet
+## The voice layer (Feature 4)
 
-Voice (`voice/*`), tools (`tools/*`), and retrieval (`rag/*`) are named in the
-target repository structure but not built in this feature. They will attach
-to `RoryCore` — voice as an adapter calling `handle_text`, tools and RAG as
-things the agent loop and prompt-builder use internally — without changing
-the adapter-facing contract.
+Voice is purely an adapter on top of `cli.py`. `RoryCore`, `agent/*`,
+`tools/*`, and `rag/*` did not change at all for this feature — voice input
+becomes a `str` (a transcript) before it ever reaches `RoryCore.handle_text`,
+and voice output starts from the plain `str` on `Reply.text`.
+
+```
+TTS (out):
+  reply.text
+      ↓
+  TTS.synthesize(text) -> WAV bytes    (CachedTTS -> FallbackTTS -> Sarvam/local)
+      ↓
+  audio.play(wav_bytes)                 sounddevice, blocks until done
+
+STT (in):
+  Enter (start) ... Enter (stop)        click-to-stop, no VAD/endpointing
+      ↓
+  Recorder captures at the DEVICE'S OWN native rate
+      ↓
+  audio.resample(..., to_rate=16000)    linear interpolation (numpy only)
+      ↓
+  audio.to_wav_bytes(...)  ->  STT.transcribe(wav_bytes) -> str
+      ↓
+  is_usable(transcript)?    no -> "couldn't hear that clearly" and STOP,
+      ↓ yes                        never reaches RoryCore
+  print "heard: <transcript>"       <- shown before the answer, always
+      ↓
+  RoryCore.handle_text(transcript)  (same path text input always used)
+```
+
+**`rory/voice/audio.py`** — `to_wav_bytes`/`from_wav_bytes` are pure functions
+(no device), so the WAV format itself is unit-tested without hardware.
+`Recorder` opens the input stream at the device's *own* default sample rate
+rather than assuming 16kHz — some ALSA hardware devices reject arbitrary
+rates outright — then resamples what was captured down to 16kHz afterward.
+Resampling is linear interpolation via numpy; there's no scipy in this
+project's dependencies, and linear is more than sufficient for speech going
+into an STT model.
+
+**`rory/voice/tts.py`** — `SarvamTTS` (Bulbul), `LocalTTS` (espeak-ng via
+`subprocess`, argv list, `shell=False` — same discipline as
+`tools/desktop.py`), `FallbackTTS` (Sarvam → local on credit exhaustion, a
+5xx, or a timeout — all three were observed for real against the live API
+during development, not hypothetical), and `CachedTTS`
+(`sha256(text + voice)` under `data/tts_cache/`, gitignored, regenerable).
+
+**`rory/voice/stt.py`** — `SarvamSTT` (Saaras) and `is_usable(transcript)`,
+the whole mechanism behind "empty or unusable transcripts must not reach the
+LLM." Verified against a real 2-second recording of ambient silence during
+development: Sarvam returned `""`, and `is_usable("")` correctly rejected it
+before `RoryCore.handle_text` was ever called.
+
+### Why the transcript is always shown before the answer
+
+Mishearing a proper noun is the single most common failure mode in a voice
+pipeline built on someone's personal notes — "Relay" becoming "railay,"
+"CUSTOS" becoming "customs." There's no way to catch that from inside the
+STT or LLM calls themselves; the cheapest fix that actually works is showing
+the user what Rory *heard*, before showing what it answered, so a
+mis-transcription is obvious immediately instead of surfacing as a
+confusingly wrong answer three sentences later.
+
+### Two turn_ids, not one, for a single voice turn
+
+`RoryCore.handle_text` mints its own `turn_id` internally and cannot be
+handed one from outside without changing `core.py` — which this feature was
+explicitly not allowed to touch. So the `stt` trace event (which happens
+*before* `handle_text` is ever called) gets its own `turn_id`, while
+`llm_generate`/`tool_dispatch`/`tts` all share the one `RoryCore` generated.
+A deliberate seam, not an oversight — correlating stt-to-answer requires
+reading trace timestamps rather than a single shared id.

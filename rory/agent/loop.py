@@ -11,6 +11,7 @@ import json
 import time
 
 from rory.llm import LLM, Message, ToolCall
+from rory.rag import retrieve  # noqa: F401 — importing registers search_notes
 from rory.tools import clock, desktop  # noqa: F401 — importing registers the tools
 from rory.tools.registry import dispatch, schemas, truncate_result
 from rory.trace import Trace
@@ -25,10 +26,17 @@ CAP_REACHED_TEXT = (
 )
 
 
-def run(llm: LLM, messages: list[Message], system: str, trace: Trace) -> str:
+def run(
+    llm: LLM,
+    messages: list[Message],
+    system: str,
+    trace: Trace,
+    tools: list[dict] | None = None,
+) -> str:
+    tools = schemas() if tools is None else tools
     for _ in range(MAX_ITERATIONS):
         started = time.monotonic()
-        response = llm.generate(messages, system=system, tools=schemas())
+        response = llm.generate(messages, system=system, tools=tools)
         trace.event(
             "llm_generate",
             (time.monotonic() - started) * 1000,
