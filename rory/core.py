@@ -6,6 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from rory.agent import loop
 from rory.agent.prompts import build_system_prompt
 from rory.llm import LLM, Message
 from rory.trace import Trace
@@ -39,22 +40,17 @@ class RoryCore:
             self._history.append({"role": "user", "content": text})
             self._trim_history()
 
-            llm_start = time.monotonic()
-            response = self._llm.generate(self._history, system=build_system_prompt())
-            trace.event(
-                "llm_generate",
-                (time.monotonic() - llm_start) * 1000,
-                prompt_chars=trace.text_or_len(text),
-                completion_chars=len(response.text),
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-            )
+            trace.event("turn_start", 0.0, prompt_chars=trace.text_or_len(text))
 
-            self._history.append({"role": "assistant", "content": response.text})
+            # The loop appends its own tool-call and tool-result messages, so
+            # the next turn sees what was actually run.
+            answer = loop.run(self._llm, self._history, build_system_prompt(), trace)
+
+            self._history.append({"role": "assistant", "content": answer})
             self._trim_history()
 
             trace.event("turn_complete", (time.monotonic() - turn_start) * 1000)
-            return Reply(turn_id=turn_id, text=response.text)
+            return Reply(turn_id=turn_id, text=answer)
 
         except Exception as exc:
             trace.event("turn_error", (time.monotonic() - turn_start) * 1000, error=str(exc))

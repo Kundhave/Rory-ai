@@ -49,6 +49,62 @@ audio device or a Qt event loop exists.
 - **`rory/cli.py`** — a text REPL over `RoryCore.handle_text`. The primary
   development interface; see DECISIONS.md for why.
 
+## The tool pipeline (Feature 2)
+
+```
+model emits ToolCall(name, arguments)   <- untrusted
+        ↓
+registry.dispatch(name, arguments)
+        ↓  tool exists?            no -> {ok: false, error}
+        ↓  arguments validated?    no -> {ok: false, error}   <- enum checked HERE
+        ↓  ═══════════ trust boundary ═══════════
+tool function runs           APPS[app] -> hardcoded argv list
+        ↓  raises?                 yes -> {ok: false, error}
+        ↓
+truncate_result(...)  ~2KB
+        ↓
+appended to history as a TOOL RESULTS message -> next iteration
+```
+
+**`rory/tools/registry.py`** — `@tool` registers a function, deriving its JSON
+schema from type hints. A `Literal[...]` hint becomes an enum. `dispatch`
+validates *completely* before the tool body runs and never raises: an unknown
+tool, a bad argument, or an exception inside a tool all become an ordinary
+`{ok: false, error}` result the model can read and explain.
+
+**`rory/tools/desktop.py`** — the whitelist. `APPS` maps an enum key to an
+`App` holding a hardcoded argv list and the process name to match. Model
+output is only ever a dict *key*; nothing it produces is interpolated into a
+command. `AppName = Literal[*APPS]` derives the schema enum from the whitelist
+itself, so the two cannot drift.
+
+**`rory/tools/clock.py`** — `get_datetime`, no arguments, no I/O.
+
+**`rory/agent/loop.py`** — generate → dispatch → append results → repeat, with
+a hard cap of `MAX_ITERATIONS = 4`. Tool exchanges are written into the normal
+message history as text (`TOOL CALLS` / `TOOL RESULTS`), which keeps `Message`
+a plain `{role, content}` pair rather than adding a provider-specific tool
+message type.
+
+### Verified vs. running
+
+`check_app_running` returns `verified` separately from `running` because
+"it is not running" and "I could not tell whether it is running" are different
+answers, and collapsing them is how an assistant ends up fabricating. Four
+outcomes:
+
+| Situation | ok | running | verified |
+|---|---|---|---|
+| Process matched | true | true | true |
+| Full scan, no match | true | false | true |
+| Some processes unreadable, no match | true | false | **false** |
+| Scan failed, or app has no distinct process name | false | null | **false** |
+
+`running: null` rather than `false` in the last row is deliberate — there is no
+value the model could mistake for an answer. The grounding rules in
+`agent/prompts.py` tell it to report uncertainty when `verified` is false, but
+the *mechanism* is this envelope, not the prompt.
+
 ## Where state lives
 
 - Conversation history: in-memory, inside a `RoryCore` instance, bounded to
