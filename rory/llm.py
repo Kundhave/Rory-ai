@@ -1,9 +1,10 @@
 """LLM Protocol and the Gemini implementation.
 
 The protocol normalises exactly three things every provider gives us: text,
-tool calls, and token usage. Tool calls are unused until Feature 2, but the
-shape is defined now so the agent loop can be built against a stable
-interface without a breaking change later.
+tool calls, and token usage.
+
+Tool schemas go in as plain JSON-schema dicts; provider-specific packaging
+stays inside the implementation.
 """
 from __future__ import annotations
 
@@ -40,11 +41,25 @@ class LLMResponse:
 
 
 class LLM(Protocol):
-    def generate(self, messages: list[Message], system: str | None = None) -> LLMResponse:
+    def generate(
+        self,
+        messages: list[Message],
+        system: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
         ...
 
 
 _ROLE_MAP = {"user": "user", "assistant": "model"}
+
+
+def _declaration(schema: dict) -> dict:
+    # Gemini rejects a parameters block with no properties, so omit it entirely
+    # for zero-argument tools.
+    declaration = {"name": schema["name"], "description": schema["description"]}
+    if schema["parameters"]["properties"]:
+        declaration["parameters"] = schema["parameters"]
+    return declaration
 
 
 class GeminiLLM:
@@ -52,19 +67,35 @@ class GeminiLLM:
         self._client = genai.Client(api_key=api_key)
         self._model = model
 
-    def generate(self, messages: list[Message], system: str | None = None) -> LLMResponse:
+    def generate(
+        self,
+        messages: list[Message],
+        system: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
         contents = [
             types.Content(role=_ROLE_MAP[m["role"]], parts=[types.Part.from_text(text=m["content"])])
             for m in messages
         ]
-        config = types.GenerateContentConfig(system_instruction=system) if system else None
+        config = types.GenerateContentConfig(
+            system_instruction=system,
+            tools=[types.Tool(function_declarations=[_declaration(t) for t in tools])] if tools else None,
+            # We dispatch tools ourselves through the registry; the SDK must
+            # never invoke anything on its own.
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
         response = self._client.models.generate_content(
             model=self._model, contents=contents, config=config
         )
+        parts = response.candidates[0].content.parts or [] if response.candidates else []
         usage = response.usage_metadata
         return LLMResponse(
-            text=response.text or "",
-            tool_calls=[],
+            text="".join(part.text for part in parts if part.text),
+            tool_calls=[
+                ToolCall(name=part.function_call.name, arguments=dict(part.function_call.args or {}))
+                for part in parts
+                if part.function_call
+            ],
             usage=TokenUsage(
                 prompt_tokens=usage.prompt_token_count or 0,
                 completion_tokens=usage.candidates_token_count or 0,

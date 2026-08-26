@@ -32,7 +32,7 @@ def test_second_turn_can_reference_earlier_fact():
 
 def test_llm_failure_becomes_error_reply_not_exception():
     class BrokenLLM:
-        def generate(self, messages, system=None):
+        def generate(self, messages, system=None, tools=None):
             raise RuntimeError("upstream exploded")
 
     core = RoryCore(BrokenLLM())
