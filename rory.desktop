@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Rory
+Comment=Voice-first personal AI assistant
+Exec=/home/kundhave/Projects/404/Rory-ai/run.sh
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;
+StartupNotify=false

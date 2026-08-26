@@ -263,3 +263,97 @@ explicitly not allowed to touch. So the `stt` trace event (which happens
 `llm_generate`/`tool_dispatch`/`tts` all share the one `RoryCore` generated.
 A deliberate seam, not an oversight — correlating stt-to-answer requires
 reading trace timestamps rather than a single shared id.
+
+## The desktop widget (Feature 5)
+
+`rory/ui/widget.py` is a third adapter, alongside `cli.py`. It changed
+nothing in `core.py`, `agent/*`, `tools/*`, `rag/*`, or `voice/*` — it only
+calls their existing public interfaces (`RoryCore.handle_text`, the `TTS`/
+`STT` Protocols, `Recorder`).
+
+```
+Qt main thread                         VoiceWorker (its own QThread)
+───────────────                        ─────────────────────────────
+click on widget / socket datagram
+        │  emit request_start (queued across threads)
+        └──────────────────────────────►  Recorder().start()
+                                                │  emit state_changed(LISTENING)
+        ◄───────────────────────────────────────┘
+click on widget again
+        │  emit request_stop
+        └──────────────────────────────►  recorder.stop() -> wav_bytes
+                                                │  emit state_changed(PROCESSING)
+                                           STT.transcribe(wav_bytes)
+                                                │  emit transcript_ready / state_changed(IDLE) if unusable
+                                           RoryCore.handle_text(transcript)
+                                                │  emit state_changed(ERROR) if reply.error, stop here
+                                           emit reply_ready(reply.text)
+                                                │  emit state_changed(SPEAKING)
+                                           TTS.synthesize + play
+                                                │  emit state_changed(ERROR) if TTS fails, reply text stands
+        ◄──────────────────────────────────────┘  emit state_changed(IDLE)
+update border color / text panel
+```
+
+**`RoryStickyWidget`** wraps the user's own `assets/images/widget.svg`,
+rendered via `QSvgWidget` unmodified, inside a `QFrame` whose border color
+encodes the current state (`_STATE_COLORS`). A small text panel below the
+image shows the transcript/reply, hidden when there's nothing to show. The
+window opens once at startup and stays open for Rory's entire run — it does
+not hide after a turn the way a popup would. See ADR-013 for why this
+replaced the tray+popup design from the initial version of this feature.
+
+### The threading rule that matters
+
+The Qt main thread only ever does two things: handle a click/socket event,
+and update a label or icon in response to a signal. Every device- or
+network-touching call — `Recorder.start/stop`, `STT.transcribe`,
+`RoryCore.handle_text`, `TTS.synthesize`, `audio.play` — happens inside
+`VoiceWorker`, which lives on its own `QThread`. The two directions
+(`request_start`/`request_stop` going into the worker, `state_changed`/
+`transcript_ready`/`reply_ready` coming back) are both plain Qt signal
+emissions. Qt itself detects that sender and receiver live on different
+threads and automatically delivers the call as a thread-safe queued
+invocation — nothing here manually locks anything or calls a worker method
+directly, and the worker never imports or touches a `QWidget`. This is what
+keeps a slow network call from freezing the UI, and what keeps this feature
+free of the crash-not-error failure mode that comes from touching a widget
+off the main thread.
+
+### The five states, and what ERROR actually shows
+
+`IDLE → LISTENING → PROCESSING → SPEAKING → IDLE` is the normal path.
+Anything can instead land in `ERROR`, carrying the *real* exception message
+as the signal's second argument — "device busy" from a `Recorder` that
+couldn't open the microphone, a Sarvam network error, a Gemini quota message
+— never a generic "something went wrong." A `TTS` failure specifically is
+treated as `ERROR` too, but only *after* `reply_ready` already delivered the
+answer text, so a voice-output failure is visible as a real error without
+erasing the text response that's the whole point of "never lose the
+response."
+
+### Why the widget can't reliably position or pin itself (confirmed, not assumed)
+
+Under Wayland, a client cannot position its own top-level window, and there
+is no cross-compositor "always on top" — both are compositor policy. This
+was tested directly against the running Hyprland session while building
+this feature, not inferred from documentation: `RoryStickyWidget.move()` had
+zero effect on the window's actual screen position, both by default (tiled)
+and after forcing `floating` on via a live compositor rule. Making the
+window float, stay pinned, and sit at a specific spot is therefore a
+Hyprland config change, not something this code can guarantee — see
+README.md, which documents the shape of the rule needed and is honest about
+not having a confirmed-working exact syntax for every Hyprland version.
+
+### The socket trigger, and why there's no global hotkey
+
+Global-hotkey libraries hook low-level input in a way that mostly doesn't
+work under Wayland's security model (a compositor doesn't let arbitrary
+clients listen to all keyboard input). Rather than fight that, `widget.py`
+binds a `SOCK_DGRAM` Unix socket at `$XDG_RUNTIME_DIR/rory.sock` and reads
+it via `QSocketNotifier` on the main thread's event loop — not polled, costs
+nothing while idle, and any datagram received just calls the same `toggle()`
+a click on the widget does. The compositor keeps owning the actual keybind;
+Rory just listens. See README.md for the exact Hyprland binding — verified
+live with `socat` during development, including a full record → STT →
+short-circuit round trip triggered entirely through the socket.
