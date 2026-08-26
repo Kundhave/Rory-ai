@@ -22,9 +22,10 @@ from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSocketNotifier, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction
-from PySide6.QtSvgWidgets import QSvgWidget
+import numpy as np
+from PySide6.QtCore import QObject, QSocketNotifier, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QAction, QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QMenu, QVBoxLayout, QWidget
 
 from rory.config import settings
@@ -55,10 +56,13 @@ class State(Enum):
     ERROR = "error"
 
 
+# The status button's color per state. IDLE is the requested light pink;
+# PROCESSING stays pink too since the spinner (not a color change) is what
+# communicates "loading" — see _StatusButton.
 _STATE_COLORS = {
-    State.IDLE: "#7f8c8d",
+    State.IDLE: "#f6a9c9",
     State.LISTENING: "#e74c3c",
-    State.PROCESSING: "#f39c12",
+    State.PROCESSING: "#f6a9c9",
     State.SPEAKING: "#2ecc71",
     State.ERROR: "#c0392b",
 }
@@ -154,13 +158,137 @@ class VoiceWorker(QObject):
 
 SVG_PATH = Path("assets/images/widget.svg")
 IMAGE_SIZE = 140
+_RENDER_RESOLUTION = 1024  # matches the SVG's own viewBox
+
+
+def _cropped_artwork(max_dimension: int) -> tuple[QPixmap, float]:
+    """The SVG canvas has a lot of transparent margin around the actual
+    drawing (confirmed: a 1024x1024 canvas holding artwork occupying only a
+    few hundred pixels of it) — without cropping, the widget shows a tiny
+    image inside a mostly-empty frame. This finds the bounding box of the
+    non-transparent pixels and crops to it, so the frame hugs the actual
+    artwork. Returns the scaled pixmap and its aspect ratio (width/height),
+    so the caller can size a frame that matches instead of forcing a square.
+    """
+    renderer = QSvgRenderer(str(SVG_PATH))
+    full = QImage(_RENDER_RESOLUTION, _RENDER_RESOLUTION, QImage.Format.Format_ARGB32)
+    full.fill(0)
+    painter = QPainter(full)
+    renderer.render(painter)
+    painter.end()
+
+    buf = full.constBits()
+    arr = np.frombuffer(buf, dtype=np.uint8).reshape(full.height(), full.width(), 4)
+    alpha = arr[:, :, 3]
+    ys, xs = np.where(alpha > 10)
+
+    if len(xs) == 0:
+        cropped = full
+    else:
+        pad = 8
+        x0, x1 = max(int(xs.min()) - pad, 0), min(int(xs.max()) + pad, full.width())
+        y0, y1 = max(int(ys.min()) - pad, 0), min(int(ys.max()) + pad, full.height())
+        cropped = full.copy(x0, y0, x1 - x0, y1 - y0)
+
+    aspect = cropped.width() / cropped.height()
+    pixmap = QPixmap.fromImage(cropped).scaled(
+        max_dimension,
+        max_dimension,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    return pixmap, aspect
+
+
+class _StatusButton(QWidget):
+    """The click target: a small round badge overlaid on the cat's corner.
+    Its color and icon are the state indicator now (the border rectangle
+    this replaced didn't fit "just the cat, no square" well). Drawn, not
+    loaded — no icon assets needed for a handful of simple glyphs."""
+
+    SIZE = 32
+    _SPIN_INTERVAL_MS = 60
+    _SPIN_STEP_DEG = 30
+
+    clicked = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._state = State.IDLE
+        self._spin_angle = 0
+        self._spin_timer = QTimer(self)
+        self._spin_timer.setInterval(self._SPIN_INTERVAL_MS)
+        self._spin_timer.timeout.connect(self._advance_spin)
+
+    def set_state(self, state: State) -> None:
+        self._state = state
+        if state in (State.PROCESSING, State.SPEAKING):
+            if not self._spin_timer.isActive():
+                self._spin_timer.start()
+        else:
+            self._spin_timer.stop()
+        self.update()
+
+    def _advance_spin(self) -> None:
+        self._spin_angle = (self._spin_angle + self._SPIN_STEP_DEG) % 360
+        self.update()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 — Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — Qt override
+        # Qt swallows exceptions raised inside a paintEvent override (they
+        # print to stderr rather than propagate) — real drawing logic lives
+        # in _paint() below instead so tests calling it directly actually
+        # see a raised exception rather than silence. This gap is exactly
+        # how a real QPen API-misuse crash slipped past every prior test.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._paint(painter)
+
+    def _paint(self, painter: QPainter) -> None:
+        painter.setBrush(QColor(_STATE_COLORS[self._state]))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(1, 1, self.SIZE - 2, self.SIZE - 2)
+
+        if self._state in (State.PROCESSING, State.SPEAKING):
+            # A loading spinner: a short rotating arc.
+            spin_pen = QPen(QColor("white"), 3)
+            spin_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(spin_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            rect = self.rect().adjusted(8, 8, -8, -8)
+            painter.drawArc(rect, self._spin_angle * 16, 110 * 16)
+        elif self._state == State.ERROR:
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(14)
+            painter.setFont(font)
+            painter.setPen(QColor("white"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "!")
+        else:
+            # A simple mic glyph: a rounded capsule + a small stand line.
+            # Solid white when idle; the button's red fill during LISTENING
+            # is what actually signals "recording."
+            painter.setBrush(QColor("white"))
+            painter.setPen(Qt.PenStyle.NoPen)
+            capsule = self.rect().adjusted(12, 6, -12, -15)
+            painter.drawRoundedRect(capsule, 4, 4)
+            painter.setPen(QPen(QColor("white"), 2))
+            mid_x = self.SIZE // 2
+            painter.drawLine(mid_x, self.SIZE - 11, mid_x, self.SIZE - 7)
+            painter.drawLine(mid_x - 4, self.SIZE - 7, mid_x + 4, self.SIZE - 7)
 
 
 class RoryStickyWidget(QWidget):
     """The always-visible desktop widget: the user's own SVG artwork,
-    unmodified, inside a state-colored border, plus a small text panel for
-    the transcript/reply. Stays open for Rory's whole run rather than
-    hiding after a turn.
+    unmodified, with a small round status button overlaid on its corner as
+    the click target, plus a small text panel for the transcript/reply.
+    Stays open for Rory's whole run rather than hiding after a turn.
 
     Wayland gives no way for an application to truly pin itself always-on-
     top or embed into the desktop layer — see docs/DECISIONS.md ADR-012 and
@@ -179,31 +307,42 @@ class RoryStickyWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedWidth(IMAGE_SIZE)
 
+        pixmap, aspect = _cropped_artwork(IMAGE_SIZE - 8)
+        # Frame hugs the artwork's actual proportions (portrait, in this
+        # image) rather than forcing a square with visible empty margin.
+        if aspect >= 1:
+            frame_w, frame_h = IMAGE_SIZE, round(IMAGE_SIZE / aspect)
+        else:
+            frame_w, frame_h = round(IMAGE_SIZE * aspect), IMAGE_SIZE
+
         self._image_frame = QFrame()
-        self._image_frame.setFixedSize(IMAGE_SIZE, IMAGE_SIZE)
-        self._set_border(State.IDLE)
+        self._image_frame.setFixedSize(frame_w, frame_h)
+        self._image_frame.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._image_frame.setAutoFillBackground(False)
+        self._image_frame.setStyleSheet("background: transparent; border: none;")
 
-        svg = QSvgWidget(str(SVG_PATH), self._image_frame)
-        svg.setFixedSize(IMAGE_SIZE - 8, IMAGE_SIZE - 8)
-        svg.move(4, 4)
+        image_label = QLabel(self._image_frame)
+        image_label.setPixmap(pixmap)
+        image_label.setFixedSize(frame_w, frame_h)
+        image_label.move(0, 0)
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        image_label.setAutoFillBackground(False)
+        image_label.setStyleSheet("background: transparent;")
 
-        self._transcript = QLabel("")
-        self._transcript.setWordWrap(True)
-        self._transcript.setMaximumWidth(IMAGE_SIZE)
-        self._transcript.setStyleSheet(_TEXT_PANEL_STYLE)
-        self._transcript.hide()
-
-        self._reply = QLabel("")
-        self._reply.setWordWrap(True)
-        self._reply.setMaximumWidth(IMAGE_SIZE)
-        self._reply.setStyleSheet(_TEXT_PANEL_STYLE)
-        self._reply.hide()
+        # Overlaid as a badge on the cat's bottom-right corner, overlapping
+        # slightly rather than sitting fully outside the artwork.
+        self._status_button = _StatusButton(self._image_frame)
+        self._status_button.move(
+            frame_w - _StatusButton.SIZE + 4,
+            frame_h - _StatusButton.SIZE + 4,
+        )
+        self._status_button.raise_()
+        self._status_button.clicked.connect(self.toggled)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 8)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._image_frame, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self._transcript)
-        layout.addWidget(self._reply)
 
         self._position_default()
 
@@ -215,16 +354,7 @@ class RoryStickyWidget(QWidget):
         # actually controls placement here.
         self.adjustSize()
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.right() - self.width() - 40, screen.top() + 40)
-
-    def _set_border(self, state: State) -> None:
-        self._image_frame.setStyleSheet(
-            f"border: 4px solid {_STATE_COLORS[state]}; border-radius: 16px; background: transparent;"
-        )
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 — Qt override
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.toggled.emit()
+        self.move(screen.right() - self.width() - 40, screen.bottom() - self.height() - 40)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 — Qt override
         menu = QMenu(self)
@@ -238,22 +368,11 @@ class RoryStickyWidget(QWidget):
         event.accept()
 
     def set_state(self, state: State, detail: str) -> None:
-        self._set_border(state)
+        # detail (the actual error text, when there is one) still surfaces
+        # via the tooltip — not shown as always-visible text on the widget,
+        # per request, but not silently discarded either.
+        self._status_button.set_state(state)
         self.setToolTip(state.value + (f": {detail}" if detail else ""))
-
-    def set_transcript(self, text: str) -> None:
-        self._transcript.setText(f"heard: {text}" if text else "couldn't hear that clearly — try again")
-        self._transcript.show()
-
-    def set_reply(self, text: str) -> None:
-        self._reply.setText(text)
-        self._reply.show()
-
-
-_TEXT_PANEL_STYLE = (
-    "color: white; background: rgba(0, 0, 0, 170); padding: 6px; "
-    "border-radius: 6px; margin-top: 4px;"
-)
 
 
 def bind_trigger_socket(on_trigger) -> tuple[socket.socket, QSocketNotifier]:
@@ -309,8 +428,11 @@ class RoryWidget(QObject):
         self.request_start.connect(self.worker.start_listening)
         self.request_stop.connect(self.worker.stop_and_process)
         self.worker.state_changed.connect(self._on_state_changed)
-        self.worker.transcript_ready.connect(self.sticky.set_transcript)
-        self.worker.reply_ready.connect(self.sticky.set_reply)
+        # transcript_ready/reply_ready are intentionally not connected to
+        # anything here — the widget shows state only (button color/icon +
+        # tooltip), not the transcript or reply text, per request. The
+        # worker still emits them regardless; nothing about VoiceWorker
+        # changed to accommodate this, only what the UI does with them.
 
         self._trigger_socket, self._trigger_notifier = bind_trigger_socket(self.toggle)
 

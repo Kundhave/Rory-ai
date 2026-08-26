@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from rory.core import Reply
 from rory.ui import widget as widget_module
-from rory.ui.widget import State, VoiceWorker
+from rory.ui.widget import State, VoiceWorker, _StatusButton
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 
@@ -205,3 +205,22 @@ def test_a_hanging_tts_call_times_out_instead_of_blocking_forever(monkeypatch):
 
     assert states[-1][0] == State.ERROR.value
     assert "voice unavailable" in states[-1][1]
+
+
+def test_status_button_paints_without_raising_in_every_state():
+    # A real crash was caused by a Qt API misuse (QPen's constructor doesn't
+    # accept a "cap" kwarg in PySide6) that only surfaced inside paintEvent —
+    # invisible to the pure state-machine tests above, which never render
+    # anything. Qt swallows exceptions raised inside paintEvent overrides
+    # (logs to stderr, doesn't propagate), so calling _paint() directly
+    # matters here — going through paintEvent()/repaint() would have passed
+    # even with the broken code, exactly how this bug slipped through once.
+    from PySide6.QtGui import QPainter, QPixmap
+
+    button = _StatusButton()
+    pixmap = QPixmap(_StatusButton.SIZE, _StatusButton.SIZE)
+    for state in State:
+        button.set_state(state)
+        painter = QPainter(pixmap)
+        button._paint(painter)
+        painter.end()

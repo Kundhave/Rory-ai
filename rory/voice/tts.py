@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -17,6 +18,31 @@ import httpx
 
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
 CACHE_DIR = Path("data/tts_cache")
+
+_MARKDOWN_PATTERNS = [
+    (re.compile(r"\*\*\*(.+?)\*\*\*"), r"\1"),  # ***bold italic***
+    (re.compile(r"\*\*(.+?)\*\*"), r"\1"),  # **bold**
+    (re.compile(r"\*(.+?)\*"), r"\1"),  # *italic*
+    (re.compile(r"__(.+?)__"), r"\1"),  # __bold__
+    (re.compile(r"(?<!\w)_(.+?)_(?!\w)"), r"\1"),  # _italic_
+    (re.compile(r"`(.+?)`"), r"\1"),  # `code`
+    (re.compile(r"^#{1,6}\s+", re.MULTILINE), ""),  # # headers
+    (re.compile(r"^[-*+]\s+", re.MULTILINE), ""),  # - bullet markers
+]
+
+
+def strip_markdown(text: str) -> str:
+    """The LLM writes replies with markdown emphasis meant for visual
+    display (e.g. "**CUSTOS**"). A TTS engine has no notion of markdown and
+    reads the literal characters — "asterisk asterisk CUSTOS asterisk
+    asterisk" — so this strips common markdown syntax before synthesis.
+    Applied here rather than relying on a prompt instruction: an LLM
+    avoiding markdown "most of the time" isn't good enough when the failure
+    mode is audibly reading out punctuation."""
+    cleaned = text
+    for pattern, repl in _MARKDOWN_PATTERNS:
+        cleaned = pattern.sub(repl, cleaned)
+    return cleaned
 
 
 class TTS(Protocol):
@@ -116,6 +142,7 @@ class CachedTTS:
         self._cache_dir = cache_dir
 
     def synthesize(self, text: str) -> bytes:
+        text = strip_markdown(text)
         key = hashlib.sha256(f"{text}|{self._voice}".encode("utf-8")).hexdigest()
         path = self._cache_dir / f"{key}.wav"
         if path.exists():
