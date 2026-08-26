@@ -234,6 +234,63 @@ fits in a context window; at the current scale, both approaches are cheap and
 fast in absolute terms, and the choice is really about future headroom versus
 today's slightly higher pass rate.
 
+## Desktop widget
+
+A persistent on-screen widget showing `assets/images/widget.svg` — the same
+`RoryCore` and voice pipeline as the CLI, wrapped in a PySide6 GUI. Nothing
+about tools, retrieval, or the agent loop changes based on whether a turn
+started in the CLI or the widget.
+
+```bash
+./run.sh
+```
+
+or install `rory.desktop` into your app launcher — copy or symlink it into
+`~/.local/share/applications/`. **`rory.desktop`'s `Exec=` path is hardcoded
+to this checkout's location; edit it if you clone Rory somewhere else.**
+
+**Using it**: the widget stays open on screen for as long as Rory is
+running. Click it to start listening; click again to stop and process. A
+colored border around the image shows the current state (idle/listening/
+processing/speaking/error) without altering the artwork itself. What Rory
+heard and said appears in a small text panel below the image, only while
+there's something to show — voice is the primary channel, but the text is
+always readable, which is how you catch a misheard name. The **error state
+shows the actual error** (a device error, a network failure, an API quota
+message), not a generic "something went wrong." Right-click for a Quit
+option, or just close the window.
+
+### Known desktop-environment caveats (tested on Hyprland 0.56 / Wayland, `omarchy` session)
+
+- **No custom window positioning, confirmed by testing, not assumed.**
+  Wayland doesn't let a client set its own top-level window's screen
+  position. I tested this directly: the widget's own `move()` call had no
+  effect regardless of whether the window was floating or tiled — position
+  is entirely Hyprland's call. Drag it wherever you want after it opens;
+  that placement holds for the life of the window.
+- **No always-on-top**, for the same reason — it's compositor policy, not
+  something a client can request and have honored. The window just stays
+  open; it does not hide or close itself between turns.
+- **Making it float and stay put is a Hyprland config change only you can
+  make** — I could not verify one exact working rule for your Hyprland
+  0.56 install; live-tested three syntax variants against the running
+  compositor and each was rejected (`windowrulev2` is deprecated in this
+  version; the newer `windowrule = match:title ..., <action>` form rejected
+  every variant I tried). Rather than hand you a rule I haven't confirmed
+  works, check `hyprctl clients` for the widget's title (`Rory`) and consult
+  `hyprland.conf`'s current window-rules documentation for your exact
+  version — the shape you want is "float and pin, matched by title `^(Rory)$`."
+- **No built-in global hotkey**, and none is attempted — hotkey libraries
+  mostly can't hook keyboard input under Wayland's security model. Instead,
+  Rory listens on a Unix socket at `$XDG_RUNTIME_DIR/rory.sock`; anything
+  written to it toggles listening, exactly like clicking the widget. Bind
+  your own keypress to it — for Hyprland, add to `~/.config/hypr/bindings.conf`:
+  ```
+  bind = SUPER, R, exec, echo -n "toggle" | socat - UNIX-SENDTO:$XDG_RUNTIME_DIR/rory.sock
+  ```
+  (needs `socat`, already on this machine; any tool that can write a
+  datagram to a Unix socket works — verified live with exactly this command).
+
 ## Testing
 
 ```bash

@@ -318,3 +318,133 @@ this feature — switching from `anushka` to `manisha`) can never silently
 replay stale audio in the wrong voice.
 
 **Date**: 2026-08-26
+
+---
+
+## ADR-011: PySide6 over GTK/Tkinter for the desktop widget
+
+**Decision**: The desktop widget is built with PySide6 (Qt), which was
+already this project's declared dependency for the GUI band before this
+feature was built.
+
+**Context**: PySide6 was already in CLAUDE.md's fixed tech-stack list from
+before Feature 1 was written, so this wasn't really an open choice made
+during this feature — it's worth recording *why* it was the right call
+regardless, since the alternatives were genuinely viable.
+
+**Alternatives**: Tkinter (stdlib, zero install cost, but its threading story
+is weaker — it has no equivalent of Qt's automatic cross-thread signal
+marshaling, so a correct worker-thread design needs more manual plumbing
+around `after()` polling). GTK (a fine toolkit, first-class on Linux, but a
+second UI framework to learn with no reuse against Qt's very complete
+`QSystemTrayIcon`/`QSocketNotifier`/threading primitives, all of which this
+feature leans on directly).
+
+**Tradeoff**: PySide6 is a heavier dependency (network of Qt shared
+libraries) than Tkinter's zero-cost stdlib inclusion. In exchange: signals
+crossing threads safely is a built-in primitive rather than something to
+hand-build, `QSystemTrayIcon` and `QSocketNotifier` are both first-class and
+already proven in this exact feature, and the whole threading model this
+feature's correctness depends on ("every state change crosses back to the
+main thread via a Qt signal") is a framework guarantee, not a convention
+this project has to enforce by hand.
+
+**Date**: 2026-08-26
+
+---
+
+## ADR-012: Tray + fixed-position popup + socket trigger, not a floating always-on-top window
+
+**Decision**: The widget's primary UI is a system tray icon plus a small
+popup shown at a fixed screen position on click, with an additional Unix
+socket (`$XDG_RUNTIME_DIR/rory.sock`) that an external trigger (a compositor
+keybind) can write to for the same toggle effect. There is no attempt at a
+floating, always-on-top, click-to-talk window, and no attempt to register a
+global hotkey from inside the application.
+
+**Context**: This project's actual desktop environment is Hyprland under
+Wayland (confirmed via `$XDG_SESSION_TYPE`/`$XDG_CURRENT_DESKTOP` before this
+feature was built, not assumed). Under Wayland, a client cannot position its
+own top-level window, and "always on top" is compositor policy rather than
+something an application can request and have honored consistently. A
+global-hotkey library mostly cannot hook keyboard input at all under
+Wayland's security model, since that would mean one client eavesdropping on
+every keystroke system-wide. Building against either assumption would work
+by accident on some compositors and silently misbehave on others — exactly
+what CLAUDE.md's "do not build something that silently misbehaves" was
+warning against.
+
+**Alternatives**: (a) A floating always-on-top widget positioned near the
+cursor or screen corner — works on X11, unreliable-to-broken on Wayland
+compositors depending on their specific window-management protocol support.
+(b) An in-process global hotkey library — mostly non-functional under
+Wayland for the security reason above, and would need an X11-specific
+fallback path this project isn't trying to maintain. (c) A compositor
+scripting integration (e.g. a Hyprland-specific IPC call) — ties this
+project to one compositor, when the goal is a Linux voice assistant, not a
+Hyprland-specific one.
+
+**Tradeoff**: No exact "appears right next to the tray icon" positioning
+(the popup opens at a fixed offset instead), and no self-contained global
+hotkey — the user must bind a keypress in their own compositor/DE to write to
+the socket (documented in README.md for Hyprland specifically, since that's
+this project's actual environment). In exchange: the tray icon and the popup
+both behave identically across any Wayland compositor with tray support, the
+socket approach works identically under X11 too with zero special-casing,
+and the keybinding stays exactly where it belongs — owned by the desktop
+environment, which is the only thing actually allowed to own it under
+Wayland's security model.
+
+**Date**: 2026-08-26
+
+---
+
+## ADR-013: Persistent SVG sticky widget supersedes the tray+popup UI (amends ADR-012)
+
+**Decision**: The desktop widget's primary UI is now a single persistent
+window showing the user's own `assets/images/widget.svg`, always open for
+Rory's whole run, with a state-colored border and a text panel that appears
+only when there's a transcript/reply to show. Click the widget itself to
+start/stop listening. There is no system tray icon anymore. The Unix socket
+trigger from ADR-012 is unchanged and stays.
+
+**Context**: ADR-012 chose tray+popup specifically because a tray icon is
+the one piece of screen real estate Wayland reliably grants a client. That
+reasoning still holds — nothing about Wayland changed. What changed is the
+actual requirement: the owner wants a specific piece of artwork
+permanently visible on the desktop as the primary interface, not hidden
+behind a tray icon until clicked. A tray-first design cannot satisfy
+"visible at all times" — a tray icon is small, generic, and the popup it
+opens is explicitly transient in ADR-012's own design.
+
+**What was tested, not assumed, before committing to this**: the window's
+own `move()` call was confirmed to have zero effect on its Wayland-reported
+position, in both the default (tiled) state and after toggling `floating`
+on via a live `hyprctl` rule — position is Hyprland's decision every time,
+matching ADR-012's underlying premise but now confirmed for a *persistent*
+window too, not just a click-triggered popup. Live-tested three separate
+`windowrule`/`windowrulev2` syntax variants against the running compositor
+(Hyprland 0.56.0) attempting to force float+pin; every variant was rejected
+by the compositor's config parser. Rather than document a rule as "correct"
+that was never confirmed working, README.md tells the owner what shape the
+rule needs (float + pin, matched by title `Rory`) and to verify the exact
+syntax against their installed version, instead of asserting a specific
+line with false confidence.
+
+**Alternatives**: Keep the tray+popup and add the SVG as the popup's
+content instead of the drawn-circle icon. Rejected because it still hides
+the widget behind a click most of the time, which directly contradicts
+"remain visible on the desktop at all times."
+
+**Tradeoff**: No tray icon means no `QSystemTrayIcon.isSystemTrayAvailable()`
+fallback path to worry about, but also no minimized/background-only mode —
+the window is always on screen somewhere, which is exactly the point, but
+means it takes up permanent space unless the user's compositor is configured
+to make it float+pin+move to an out-of-the-way spot (a config change only
+the user can make, per above). `VoiceWorker` — the actual state machine and
+threading model from Feature 5 — did not change at all; only the
+presentation layer wrapping it did, confirmed by the untouched
+`tests/test_widget.py` state-transition tests passing unmodified against
+the new UI.
+
+**Date**: 2026-08-26
