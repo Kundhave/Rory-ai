@@ -100,7 +100,139 @@ python -m rory.cli
 ```
 
 Type a message, get a reply, keep talking — it's a multi-turn conversation.
-Type `exit` or press Ctrl-D to quit.
+Type `exit` or press Ctrl-D to quit. Press Enter on an empty line to talk
+instead of type — see Voice below.
+
+## Voice
+
+Rory speaks every answer, and can take spoken input instead of typed. Voice
+is entirely an adapter over the same `RoryCore.handle_text` used for typed
+input — nothing about tools, retrieval, or the agent loop changes based on
+whether a turn started as text or speech.
+
+### Setup
+
+1. **Local voice (default, free)** — install espeak-ng:
+   ```bash
+   sudo pacman -S espeak-ng      # Arch
+   # or: sudo apt install espeak-ng   (Debian/Ubuntu)
+   ```
+   `TTS_ENGINE=local` in `.env` (or unset — it's the default) uses this,
+   never touches your Sarvam credits, and needs no network.
+
+2. **Sarvam voice (optional, real neural TTS/STT)** — get a key at
+   https://dashboard.sarvam.ai, put it in `.env` as `SARVAM_API_KEY=...`.
+   Speech input (STT) always needs this key regardless of `TTS_ENGINE`;
+   there is no local fallback for STT. Set `TTS_ENGINE=sarvam` to use the
+   real Bulbul voice for output too — pick a speaker with `TTS_VOICE`
+   (`anushka`, `manisha`, `vidya`, `abhilash`, `karun`, `hitesh`; try a few,
+   `espeak-ng --voices=en` also lists local voice options for `TTS_LOCAL_VOICE`).
+   If Sarvam fails for any reason (credit exhaustion, a server error, a
+   timeout), Rory automatically falls back to the local voice rather than
+   losing the turn's spoken answer.
+
+### Using it
+
+- **Typed in, spoken out**: type normally. The text answer is always printed
+  first, then spoken — if TTS fails for any reason, you still see the answer.
+- **Spoken in**: press Enter on an empty prompt to start recording, press
+  Enter again to stop (click-to-stop — no voice-activity detection, no
+  silence detection, no wake word: recording is exactly what happened
+  between the two keypresses). What Rory *heard* is always printed before
+  the answer — speech recognition mishearing a name or project ("Relay"
+  becoming "railay") is the most common failure in a voice pipeline over
+  personal notes, and seeing the transcript is the cheapest way to catch it.
+  A recording that transcribes to nothing usable (silence, noise) is
+  rejected before it ever reaches the LLM, with a prompt to try again.
+- Repeated phrases are cached (`data/tts_cache/`, gitignored, regenerable) —
+  hearing the same answer twice costs nothing the second time.
+
+## Knowledge base and retrieval
+
+Rory answers personal questions (projects, goals, ideas) by searching
+`knowledge/*.md` through a `search_notes` tool — see
+[knowledge/README.md](knowledge/README.md) for the file format (real
+markdown headings matter a lot for retrieval quality) and a data-sensitivity
+note before putting anything in there.
+
+```bash
+python -m rory.rag.ingest
+```
+
+Builds `data/index.npz` and `data/chunks.json` from whatever is in
+`knowledge/`. First run downloads the local embedding model
+(`BAAI/bge-small-en-v1.5`, ~100-500MB) — expect a delay. Both output files are
+fully disposable; delete them and re-run this any time the notes change.
+
+### Desktop tools
+
+Rory can launch a small whitelisted set of desktop apps and check whether one
+is running (`rory/tools/desktop.py::APPS`) and read the current date/time —
+see `docs/ARCHITECTURE.md` for the security model.
+
+## Evaluation: does RAG actually help at this scale?
+
+`tests/golden.yaml` has ~20 hand-written questions against the real knowledge
+base — which tool should fire, which source document should show up in the
+top-3 retrieved chunks, what the answer must or must not say. `rory/eval.py`
+runs them against the real Gemini API two ways:
+
+```bash
+python -m rory.eval             # RAG: search_notes retrieves on demand
+python -m rory.eval --stuff     # comparison: whole knowledge base pasted into the prompt
+```
+
+Both runs used `gemini-flash-lite-latest` against the real knowledge base
+(183 indexed chunks from `knowledge/*.md`), on 2026-08-26. Whatever these
+numbers show is what's recorded here — this was not tuned after the fact.
+
+| | RAG (`search_notes`) | `--stuff` (whole KB in prompt) |
+|---|---|---|
+| Golden cases passed | 16/20 | 19/20 |
+| Avg. prompt tokens/call | **960** | **12,088** (12.6x more) |
+| Calls per case | 1-2 (tool round trip when it fires) | 1 (2 for tool-only cases) |
+| Latency per case | 7-155s (occasional free-tier retry backoff) | consistently ~7.5s |
+
+**RAG's 4 failures**, and what they actually show:
+
+- Two (`reloop-competition`, `techtrendgpt-purpose`) are **routing** failures,
+  not retrieval failures: the always-present profile card
+  (`agent/prompts.py::PROFILE_CARD`) already names these projects with a
+  one-line description, so the model judged it already knew enough and never
+  called `search_notes` — then missed a specific fact (an exact ranking
+  number) that only lives in the full notes. This is a direct, measured
+  consequence of the profile-card design (see ARCHITECTURE.md): it buys
+  cheap identity on every turn at the cost of occasionally short-circuiting a
+  lookup that would have gotten a more precise answer.
+- One (`rag-projects`, "which of my projects use RAG?") is a genuine
+  **retrieval** miss — `search_notes` fired, but the top-3 chunks were from
+  `ABOUT_ME.md`/`IDEAS.md` rather than `PROJECTS.md`'s dedicated RAG-project
+  list. A real gap in chunk ranking for broad/enumerative questions, not a
+  routing problem.
+- One (`engineering-specialization`) is a bug in the golden case itself, not
+  the system: `expect_source: [GOALS.md, ABOUT_ME.md]` was written meaning
+  "either is acceptable," but the harness checks that *every* listed source
+  appears in top-3. Left as-is rather than quietly fixed and re-run — flagging
+  it here for whoever reviews `tests/golden.yaml` next.
+
+**`--stuff`'s 1 failure** (`internship-comp-target`, missing "25" from the
+answer) had the entire knowledge base in context and still didn't reliably
+extract one specific number — stuffing doesn't make answers dependable either.
+
+**Conclusion, honestly**: at this knowledge-base size (183 chunks, roughly
+15K tokens of raw notes), `--stuff` scored marginally higher on this run,
+because it structurally can't have a routing failure — the content is just
+already there. RAG's real, measured win is cost: **~92% fewer prompt tokens
+per call**, since most turns only pay for a ~1K-token round trip instead of
+pasting the whole KB every single time regardless of relevance. RAG's
+weakness here isn't retrieval quality (`MIN_SCORE` calibration and chunking
+held up fine in 15/16 fired cases) — it's that routing correctness depends on
+the model's judgment about whether to call the tool at all, which the profile
+card can undercut for exactly the facts it partially covers. That tradeoff
+gets more favorable for RAG as the knowledge base grows past what comfortably
+fits in a context window; at the current scale, both approaches are cheap and
+fast in absolute terms, and the choice is really about future headroom versus
+today's slightly higher pass rate.
 
 ## Testing
 

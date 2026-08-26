@@ -1,0 +1,126 @@
+# Golden questions: what "working" means for Rory's tool routing and retrieval.
+# Run with: python -m rory.eval          (RAG mode)
+#           python -m rory.eval --stuff  (whole knowledge base stuffed into the prompt)
+#
+# Fields:
+#   utterance        - what the user says
+#   expect_tool      - tool name that must fire, or null if no tool should fire
+#   expect_source    - for search_notes cases: source file(s) that must appear
+#                      in the top-3 retrieved chunks (recall@3)
+#   must_contain     - substrings (case-insensitive) that must appear in the
+#                      final answer
+#   must_not_contain - substrings that must NOT appear (used for the refusal
+#                      case, to catch invented facts)
+
+- id: relay-retries
+  utterance: "What does Relay use to handle retries?"
+  expect_tool: search_notes
+  expect_source: [PROJECTS.md]
+  must_contain: ["exponential backoff"]
+
+- id: relay-persistence-order
+  utterance: "In Relay, is the event persisted before or after it's queued?"
+  expect_tool: search_notes
+  expect_source: [PROJECTS.md]
+  must_contain: ["before"]
+
+- id: custos-anomaly-models
+  utterance: "What two models does CUSTOS use for anomaly detection?"
+  expect_tool: search_notes
+  expect_source: [PROJECTS.md]
+  must_contain: ["isolation forest"]
+
+- id: reloop-competition
+  utterance: "How did ReLoop place in Amazon HackOn?"
+  expect_tool: search_notes
+  expect_source: [PROJECTS.md]
+  must_contain: ["29"]
+
+- id: entitled-mfa
+  utterance: "What kind of MFA does Entitled use?"
+  expect_tool: search_notes
+  expect_source: [PROJECTS.md]
+  must_contain: ["totp"]
+
+- id: techtrendgpt-purpose
+  utterance: "What is TechTrendGPT for?"
+  expect_tool: search_notes
+  expect_source: [PROJECTS.md]
+
+- id: rag-projects
+  utterance: "Which of my projects use RAG?"
+  expect_tool: search_notes
+  expect_source: [PROJECTS.md]
+  must_contain: ["custos", "techtrendgpt"]
+
+- id: internship-comp-target
+  utterance: "What's my near-term internship compensation target?"
+  expect_tool: search_notes
+  expect_source: [GOALS.md]
+  must_contain: ["25"]
+
+- id: long-term-comp-target
+  utterance: "What's my long-term salary target?"
+  expect_tool: search_notes
+  expect_source: [GOALS.md]
+
+- id: dsa-completed
+  utterance: "Which sliding window problems have I already finished?"
+  expect_tool: search_notes
+  expect_source: [GOALS.md]
+  must_contain: ["longest substring"]
+
+- id: engineering-specialization
+  utterance: "What's my strongest engineering specialization according to my notes?"
+  expect_tool: search_notes
+  expect_source: [GOALS.md, ABOUT_ME.md]
+
+- id: backend-stack
+  utterance: "What backend technologies am I most experienced with?"
+  expect_tool: search_notes
+  expect_source: [ABOUT_ME.md]
+  must_contain: ["fastapi"]
+
+- id: engineering-cycle
+  utterance: "What's my usual development cycle when building something?"
+  expect_tool: search_notes
+  expect_source: [ABOUT_ME.md]
+
+- id: webhook-chaos-idea
+  utterance: "Tell me about my webhook chaos lab idea."
+  expect_tool: search_notes
+  expect_source: [IDEAS.md]
+  must_contain: ["worker"]
+
+- id: rag-uncertainty-idea
+  utterance: "What was that idea about RAG knowing when it doesn't know something?"
+  expect_tool: search_notes
+  expect_source: [IDEAS.md]
+
+- id: llm-cost-firewall-idea
+  utterance: "What's the idea behind my LLM cost firewall concept?"
+  expect_tool: search_notes
+  expect_source: [IDEAS.md]
+  must_contain: ["cache"]
+
+- id: current-datetime
+  utterance: "What's today's date?"
+  expect_tool: get_datetime
+  expect_source: []
+
+- id: day-of-week
+  utterance: "What day of the week is it?"
+  expect_tool: get_datetime
+  expect_source: []
+
+- id: small-talk-no-tool
+  utterance: "That's really helpful, thanks!"
+  expect_tool: null
+  expect_source: []
+
+- id: not-in-notes-refusal
+  utterance: "What's the name of my pet dog?"
+  expect_tool: search_notes
+  expect_source: []
+  must_not_contain: ["rex", "buddy", "max", "charlie", "bella"]
+  must_refuse: true

@@ -115,3 +115,206 @@ enum from the whitelist keys, the schema and the whitelist cannot drift apart.
 There is no second list to forget to update.
 
 **Date**: 2026-08-26
+
+---
+
+## ADR-005: No vector database at this scale
+
+**Decision**: Retrieval storage is a NumPy `.npz` file of normalised vectors
+plus a `chunks.json` sidecar. There is no Qdrant, Chroma, FAISS, or any other
+vector database, embedded or hosted.
+
+**Context**: The entire knowledge base ingests to 183 chunks. Brute-force
+cosine similarity over 183 vectors of 384 dimensions is one matrix multiply —
+milliseconds, measured, not estimated. A vector database earns its cost at a
+scale where linear scan actually becomes slow (tens of thousands of vectors
+and up) or where features like filtering, sharding, or concurrent writes from
+multiple processes are genuinely needed. None of that is true here: one user,
+one process, a knowledge base measured in personal notes rather than a
+corpus.
+
+**Alternatives**: Qdrant (already used in some of the user's other projects,
+per `knowledge/ABOUT_ME.md`) or Chroma would both work and would look more
+like "real RAG infrastructure." Both were explicitly rejected in CLAUDE.md's
+dependency list before this feature was even written.
+
+**Tradeoff**: No approximate-nearest-neighbour speedup, no persistence
+transaction log, no built-in filtering DSL — none of which matter yet. In
+exchange: the entire retrieval storage layer is two NumPy arrays, readable by
+opening the file, with no server process to run, no schema to migrate, and
+nothing that can be "down." If the knowledge base someday grows to a size
+where brute-force search shows up in a trace as slow, that's the trigger to
+revisit this ADR — not before.
+
+**Date**: 2026-08-26
+
+---
+
+## ADR-006: Retrieval as a tool, not always-on pre-retrieval
+
+**Decision**: `search_notes` is registered through the same `@tool` decorator
+and dispatched through the same registry as `open_app`, `check_app_running`,
+and `get_datetime`. There is no separate code path that runs retrieval before
+every turn and injects the top-K chunks into the prompt regardless of what
+the model asked for.
+
+**Context**: The more common RAG pattern retrieves unconditionally on every
+turn — embed the incoming message, always fetch top-K, always stuff it into
+context. That means paying an embedding call and a context-window cost on
+every turn, including "thanks!", "open my terminal", and "what time is it,"
+none of which need personal context at all. It also means the model never
+gets to ask a *different* question than the one the user typed — it's stuck
+with whatever the raw user message happened to retrieve.
+
+**Alternatives**: Always-on pre-retrieval, injected either into every system
+prompt or as a synthetic first turn. Simpler to reason about in one sense —
+retrieval always happens — but it conflates "the model decided this needs a
+knowledge-base lookup" with "the user's turn happened," which are different
+things, and it can't be selective about *when* to look something up versus
+when the profile card already covers it.
+
+**Tradeoff**: Retrieval quality now depends on the model's tool-calling
+judgment — it has to recognise a question needs `search_notes` and phrase a
+sensible query, which the golden-question harness (`rory/eval.py`) exists
+specifically to measure. In exchange: retrieval only costs an API round trip
+when something is actually being looked up, it composes with the existing
+agent loop and grounding rules instead of needing its own, and the model can
+issue a query in its own words rather than being stuck with the user's exact
+phrasing.
+
+**Date**: 2026-08-26
+
+---
+
+## ADR-007: Local embeddings, not an embedding API
+
+**Decision**: Embeddings are computed locally via `fastembed`
+(`BAAI/bge-small-en-v1.5`), both at ingest time and for every query. There is
+no call to an embeddings endpoint (Gemini's or anyone else's).
+
+**Context**: Embedding sits on the hot path of every `search_notes` call —
+the query has to be embedded before it can be compared to anything, on every
+turn that triggers retrieval. A remote embedding API adds network latency and
+a second point of failure to that path, on top of the LLM call the turn
+already needs. It also means personal notes and every query about them leave
+the machine twice (once to embed, once to generate) instead of once.
+
+**Alternatives**: Gemini's embedding endpoint, or another hosted embeddings
+API. Would remove the ~100-500MB local model download and keep the
+dependency list shorter in spirit (though `fastembed` was already in
+CLAUDE.md's tech stack before this feature existed). Would also tie
+retrieval's availability and latency to a second external service beyond the
+LLM provider already in the critical path.
+
+**Tradeoff**: A first-run model download and the disk space to hold it, plus
+being pinned to whatever quality `bge-small` offers rather than a
+provider's frontier embedding model. In exchange: retrieval works offline
+once ingested, has no per-query cost or rate limit distinct from the LLM
+call, and its latency is local compute rather than a second network
+round-trip stacked in front of every tool-calling turn.
+
+**Date**: 2026-08-26
+
+---
+
+## ADR-008: Decoupled STT/LLM/TTS instead of a managed realtime voice API
+
+**Decision**: Voice is three independent stages glued together in `cli.py` —
+record → `STT.transcribe` → `RoryCore.handle_text` → `TTS.synthesize` → play —
+rather than a single managed realtime voice API (e.g. a bidirectional
+streaming voice session that handles turn-taking, transcription, and
+synthesis as one product).
+
+**Context**: A managed realtime voice API is a genuinely appealing shortcut —
+one connection, built-in turn-taking, often lower latency. It also means the
+"LLM" and the "voice" become one vendor-shaped black box: tool calling,
+grounding rules, and the RAG/tools/agent-loop work already built in Features
+2-3 would have to be re-expressed however that specific realtime product
+allows, or abandoned. It would also make `RoryCore` no longer the true
+single entry point — a chunk of the actual conversation logic would live
+inside a provider's realtime session instead of in code this project owns
+and tests.
+
+**Alternatives**: A realtime voice API (several providers offer one). Faster
+to a demo, and turn-taking/interruption would come for free. But it collapses
+three independently-swappable Protocols (`LLM`, `STT`, `TTS`) into one
+vendor-specific integration, and this project's whole reason to exist is
+understanding each piece — see CLAUDE.md's Protocol-per-provider rule.
+
+**Tradeoff**: No built-in interruption/barge-in, and the turns are visibly
+sequential (record, then transcribe, then think, then speak) rather than
+streaming. In exchange: `RoryCore.handle_text` stays the one real entry
+point regardless of which adapter drives it, STT/LLM/TTS can each be
+swapped or mocked independently (proven directly by this feature — `tests/
+test_voice.py` never touches a real API), and the tool-calling/RAG work from
+Features 2-3 works over voice with zero changes, because voice never talks
+to the LLM directly at all.
+
+**Date**: 2026-08-26
+
+---
+
+## ADR-009: Click-to-stop instead of voice-activity detection
+
+**Decision**: Recording starts on Enter and stops on a second Enter. There is
+no voice-activity detection (VAD), silence detection, endpointing, or
+wake-word — `Recorder` captures exactly what happens between the two
+keypresses, nothing more.
+
+**Context**: VAD sounds like a small addition — "just stop recording after a
+pause" — but it is a real subsystem: a threshold to tune per-microphone and
+per-room-noise-floor, a decision about how much trailing silence is "done
+talking" versus "thinking," and a failure mode (cutting someone off
+mid-sentence, or never triggering in a noisy room) that is hard to debug
+because it's probabilistic rather than a bug you can point at.
+
+**Alternatives**: Energy-threshold VAD (simplest, but the noise-floor problem
+above), a proper VAD model (accurate, but a new dependency and a new failure
+surface for a V1), or streaming with server-side endpointing (ties this
+project to a specific STT provider's streaming API, a much bigger commitment
+than the current one-shot `POST` to Sarvam).
+
+**Tradeoff**: The user has to explicitly press Enter twice per utterance —
+less magical than "just start talking." In exchange: recording start/stop is
+a deterministic keypress with zero tuning, zero per-environment calibration,
+and zero probabilistic failure mode. Given CLAUDE.md's "a small codebase that
+is fully understood beats a large one that works," an explicit boundary the
+user controls is a better V1 trade than a VAD system nobody has tuned.
+
+**Date**: 2026-08-26
+
+---
+
+## ADR-010: TTS cache + local fallback as a cost-control decision
+
+**Decision**: Every synthesized phrase is cached to disk under
+`data/tts_cache/`, keyed by `sha256(text + voice)`. Separately, `TTS_ENGINE`
+defaults to `"local"` (espeak-ng, free, no network), and `FallbackTTS` drops
+to local automatically if Sarvam fails for any reason (credit exhaustion, a
+server error, or a timeout — all three occurred for real during this
+feature's development).
+
+**Context**: TTS is the one part of this system that, if called naively
+during iterative development, keeps charging money for the same handful of
+test phrases said over and over. The cache turns "re-run the CLI to check a
+change" from a paid API call into a disk read. The `local`-by-default engine
+means a fresh checkout of this repo never touches Sarvam credits until
+someone deliberately opts in.
+
+**Alternatives**: No cache, relying on developer discipline to not over-test
+voice output — unrealistic in practice, this is exactly the kind of cost
+that quietly adds up during normal iteration. Or caching only in a specific
+"dev mode" flag — more moving parts for no real benefit, since caching
+correct, cache-busted-by-voice-change audio is never wrong to do, even in
+production (a returning user asking the same question gets an instant
+cached answer).
+
+**Tradeoff**: `data/tts_cache/` grows unboundedly with no eviction — accepted
+for now since WAV files for short spoken replies are small and this is a
+single-user local app, not a multi-tenant service; a size cap can be added
+later if it ever matters. The cache key deliberately includes the voice
+identifier specifically so changing `TTS_VOICE` (as happened live during
+this feature — switching from `anushka` to `manisha`) can never silently
+replay stale audio in the wrong voice.
+
+**Date**: 2026-08-26

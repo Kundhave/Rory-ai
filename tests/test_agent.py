@@ -19,7 +19,7 @@ def test_tools_are_offered_to_the_llm():
     RoryCore(fake).handle_text("hi")
 
     offered = {tool["name"] for tool in fake.tools_seen[0]}
-    assert offered == {"get_datetime", "open_app", "check_app_running"}
+    assert offered == {"get_datetime", "open_app", "check_app_running", "search_notes"}
 
 
 def test_tool_result_is_fed_back_before_the_final_answer():
