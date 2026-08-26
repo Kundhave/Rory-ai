@@ -37,12 +37,17 @@ def main() -> None:
 
         if not text:
             # Constructed on first use, not at startup, so a machine with no
-            # working input device can still run the CLI in text mode.
-            recorder = Recorder()
-            print("[recording... press Enter to stop]")
-            recorder.start()
-            input()
-            wav_bytes = recorder.stop()
+            # working input device can still run the CLI in text mode. A busy
+            # or missing microphone must print a sentence, not a stack trace.
+            try:
+                recorder = Recorder()
+                print("[recording... press Enter to stop]")
+                recorder.start()
+                input()
+                wav_bytes = recorder.stop()
+            except Exception as exc:
+                print(f"[microphone unavailable: {exc}]")
+                continue
             run_voice_turn(stt, core, tts, wav_bytes)
             continue
 
@@ -63,7 +68,14 @@ def run_voice_turn(stt: STT, core: RoryCore, tts: TTS, wav_bytes: bytes) -> None
     # shared with the LLM/tool/TTS stages that follow.
     trace = Trace(str(uuid.uuid4()))
     started = time.monotonic()
-    transcript = stt.transcribe(wav_bytes)
+    try:
+        transcript = stt.transcribe(wav_bytes)
+    except Exception as exc:
+        # Speech recognition is a network call; when it fails the user gets a
+        # sentence explaining why, never a traceback.
+        trace.event("stt_error", (time.monotonic() - started) * 1000, error=str(exc))
+        print(f"[couldn't reach speech recognition: {exc}]")
+        return
     trace.event("stt", (time.monotonic() - started) * 1000, chars=trace.text_or_len(transcript))
 
     # Speech recognition mishearing a proper noun is the most common failure

@@ -62,7 +62,9 @@ class Recorder:
         self._device = device
         self._frames: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
-        self._native_rate = int(sd.query_devices(device, "input")["default_samplerate"])
+        info = sd.query_devices(device, "input")
+        self._native_rate = int(info["default_samplerate"])
+        self.device_name = info["name"]
 
     def start(self) -> None:
         self._frames = []
@@ -70,14 +72,20 @@ class Recorder:
         def callback(indata, frames, time_info, status) -> None:
             self._frames.append(indata.copy())
 
-        self._stream = sd.InputStream(
-            samplerate=self._native_rate,
-            channels=CHANNELS,
-            dtype=DTYPE,
-            device=self._device,
-            callback=callback,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self._native_rate,
+                channels=CHANNELS,
+                dtype=DTYPE,
+                device=self._device,
+                callback=callback,
+            )
+            self._stream.start()
+        except sd.PortAudioError as exc:
+            # "Device unavailable" alone doesn't say *which* device, and the
+            # usual cause is another app holding the mic — name it so the
+            # error state is actionable rather than merely accurate.
+            raise RuntimeError(f"microphone '{self.device_name}' unavailable: {exc}") from exc
 
     def stop(self) -> bytes:
         self._stream.stop()

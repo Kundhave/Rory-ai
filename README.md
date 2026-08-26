@@ -36,6 +36,10 @@ Rory is a personal, voice-first AI agent that combines **Speech-to-Text, LLM-bas
 
 The system follows a modular **STT → LLM → TTS** architecture, with RAG and memory providing context and an explicit tool layer enabling desktop actions.
 
+## How it looks:
+
+![desktop widget](assets/images/desktop_widget.png)
+
 ## Why I Built Rory?
 
 I built Rory because I wanted a project that was **genuinely fun to use while forcing me to understand how AI agents actually work** - from voice pipelines and RAG to memory, tool calling, and system architecture.

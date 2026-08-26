@@ -109,9 +109,13 @@ def run_case(case: dict, llm, system: str, tools: list[dict], stuff_mode: bool =
         elif expect_tool not in tool_calls:
             reasons.append(f"expected tool {expect_tool!r}, got {tool_calls}")
 
-        for source in case.get("expect_source", []):
-            if source not in retrieved_sources:
-                reasons.append(f"expected {source!r} in top-3 retrieved sources, got {retrieved_sources}")
+        # "any of", not "all of": a case listing several sources means the
+        # fact legitimately lives in more than one file and retrieving any is
+        # correct. (Previously this required every listed source to appear,
+        # which failed cases that were written meaning "either is fine".)
+        expected = case.get("expect_source", [])
+        if expected and not any(source in retrieved_sources for source in expected):
+            reasons.append(f"expected one of {expected} in top-3 retrieved sources, got {retrieved_sources}")
 
     for needle in case.get("must_contain", []):
         if needle.lower() not in answer.lower():

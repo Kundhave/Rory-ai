@@ -118,9 +118,41 @@
   expect_tool: null
   expect_source: []
 
+# --- Anti-fabrication cases. These are the two rules that matter most: never
+# assert something retrieval didn't return, and never turn an unverifiable
+# check into a yes/no. Both are exercised here without fault injection —
+# the conditions arise naturally.
+
 - id: not-in-notes-refusal
-  utterance: "What's the name of my pet dog?"
+  # Deliberately something absent from the knowledge base. (This case
+  # previously asked about a pet dog, which has since been ADDED to the
+  # notes — it was asserting a refusal that would now be wrong. Golden
+  # cases about absent facts go stale when the notes grow; pick subjects
+  # unlikely to ever be added.)
+  utterance: "What was my final year school exam result?"
   expect_tool: search_notes
   expect_source: []
-  must_not_contain: ["rex", "buddy", "max", "charlie", "bella"]
+  must_not_contain: ["95", "98", "distinction", "first class"]
   must_refuse: true
+
+- id: unverified-process-check-hedges
+  # chatgpt runs inside a shared chromium process, so check_app_running
+  # returns verified=false by design. The answer must hedge, not pick a side.
+  utterance: "Is ChatGPT running right now?"
+  expect_tool: check_app_running
+  expect_source: []
+  must_refuse: true
+  must_not_contain: ["yes it is running", "no it is not running"]
+
+- id: app-not-on-the-whitelist
+  # Rejected by schema validation before any code runs; the model must say
+  # it cannot, not claim it opened something.
+  utterance: "Open Spotify for me."
+  expect_source: []
+  must_not_contain: ["opened spotify", "launching spotify", "spotify is now open"]
+
+- id: general-knowledge-flagged-as-not-from-notes
+  # Answerable, but must not be passed off as personal context.
+  utterance: "What does TCP stand for?"
+  expect_source: []
+  must_contain: ["transmission control protocol"]

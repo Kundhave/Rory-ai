@@ -161,6 +161,11 @@ class FallbackTTS:
                 return audio
             except SarvamCreditExhausted:
                 break
+            except httpx.ConnectError:
+                # The network is down. Retrying cannot succeed and only
+                # delays the local voice that works offline — fail fast.
+                # Checked before TransportError, which it subclasses.
+                break
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code < 500:
                     raise
