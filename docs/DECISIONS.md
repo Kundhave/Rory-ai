@@ -92,6 +92,12 @@ rather than an executed command.
 
 ## ADR-004: Three tools, not eight
 
+> **Amended by ADR-006.** V1 as shipped has *four* tools, not three:
+> `search_notes` was added when retrieval landed, deliberately as an ordinary
+> tool rather than a separate pipeline. The principle below — variation lives
+> in arguments, not in a proliferation of near-duplicate functions — is what
+> held; the count in the title is the count at the time of writing.
+
 **Decision**: V1 ships `open_app`, `check_app_running`, and `get_datetime`.
 Variation lives in an enum argument, not in the number of functions. The
 initial sketch had roughly eight tools — `open_browser`, `open_terminal`,
@@ -124,8 +130,8 @@ There is no second list to forget to update.
 plus a `chunks.json` sidecar. There is no Qdrant, Chroma, FAISS, or any other
 vector database, embedded or hosted.
 
-**Context**: The entire knowledge base ingests to 183 chunks. Brute-force
-cosine similarity over 183 vectors of 384 dimensions is one matrix multiply —
+**Context**: The entire knowledge base ingested to 183 chunks when this was written (186 as of the V1 hardening pass — the point stands at any of these sizes). Brute-force
+cosine similarity over a couple hundred vectors of 384 dimensions is one matrix multiply —
 milliseconds, measured, not estimated. A vector database earns its cost at a
 scale where linear scan actually becomes slow (tens of thousands of vectors
 and up) or where features like filtering, sharding, or concurrent writes from

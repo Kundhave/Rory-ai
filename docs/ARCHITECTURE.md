@@ -292,16 +292,30 @@ click on widget again
                                            TTS.synthesize + play
                                                 │  emit state_changed(ERROR) if TTS fails, reply text stands
         ◄──────────────────────────────────────┘  emit state_changed(IDLE)
-update border color / text panel
+update status button colour / icon
 ```
 
-**`RoryStickyWidget`** wraps the user's own `assets/images/widget.svg`,
-rendered via `QSvgWidget` unmodified, inside a `QFrame` whose border color
-encodes the current state (`_STATE_COLORS`). A small text panel below the
-image shows the transcript/reply, hidden when there's nothing to show. The
-window opens once at startup and stays open for Rory's entire run — it does
-not hide after a turn the way a popup would. See ADR-013 for why this
-replaced the tray+popup design from the initial version of this feature.
+**`RoryStickyWidget`** shows the owner's `assets/images/widget.svg`, cropped
+to the artwork's own alpha bounding box (the source canvas is mostly
+transparent margin) and rendered on a translucent, frameless window so only
+the artwork is visible — no square backdrop. A small round `_StatusButton`
+is overlaid on its corner: that button is both the click target and the
+entire state indicator (pink idle with a mic glyph, red while recording, a
+rotating arc while processing/speaking, `!` on error). The window opens once
+at startup and stays open for Rory's entire run. See ADR-013 for why this
+replaced the tray+popup design.
+
+**The widget renders no text in normal operation — with one exception.**
+The owner asked for artwork only, so `transcript_ready` is not connected at
+all and `reply_ready` is *held rather than displayed*. The exception is a
+TTS failure: speech is the only channel the widget has, so if it fails the
+held reply is the user's only copy of the answer. `RoryStickyWidget` then
+shows a panel with the real error and the answer text, and clears it on the
+next `LISTENING`. This keeps "never lose the answer" true without putting
+text on screen during normal use.
+
+The asymmetry is deliberate: a lost *transcript* is recoverable by asking
+again, a lost *answer* is not.
 
 ### The threading rule that matters
 

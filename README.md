@@ -201,7 +201,7 @@ python -m rory.eval --stuff     # comparison: whole knowledge base pasted into t
 ```
 
 Both runs used `gemini-flash-lite-latest` against the real knowledge base
-(183 indexed chunks from `knowledge/*.md`), on 2026-08-26. Whatever these
+(186 indexed chunks from `knowledge/*.md`), on 2026-08-26. Whatever these
 numbers show is what's recorded here — this was not tuned after the fact.
 
 | | RAG (`search_notes`) | `--stuff` (whole KB in prompt) |
@@ -237,7 +237,7 @@ numbers show is what's recorded here — this was not tuned after the fact.
 answer) had the entire knowledge base in context and still didn't reliably
 extract one specific number — stuffing doesn't make answers dependable either.
 
-**Conclusion, honestly**: at this knowledge-base size (183 chunks, roughly
+**Conclusion, honestly**: at this knowledge-base size (186 chunks, roughly
 15K tokens of raw notes), `--stuff` scored marginally higher on this run,
 because it structurally can't have a routing failure — the content is just
 already there. RAG's real, measured win is cost: **~92% fewer prompt tokens
@@ -294,10 +294,26 @@ option, or just close the window.
   0.56 install; live-tested three syntax variants against the running
   compositor and each was rejected (`windowrulev2` is deprecated in this
   version; the newer `windowrule = match:title ..., <action>` form rejected
-  every variant I tried). Rather than hand you a rule I haven't confirmed
-  works, check `hyprctl clients` for the widget's title (`Rory`) and consult
-  `hyprland.conf`'s current window-rules documentation for your exact
-  version — the shape you want is "float and pin, matched by title `^(Rory)$`."
+  every variant I tried). The working form on Hyprland 0.56 — verified live,
+  and now in `~/.config/hypr/hyprland.conf` — needs an explicit **value** on
+  each action:
+  ```
+  windowrule = match:title ^Rory$, float 1
+  windowrule = match:title ^Rory$, pin 1
+  windowrule = match:title ^Rory$, move 1356 684
+  ```
+- **Coordinates are in logical, scale-divided pixels — not physical ones.**
+  This display is 1920x1080 at `scale=1.25`, so the usable coordinate space
+  is 1536x864. A `move` computed against 1920x1080 puts the widget
+  off-screen, which looks exactly like "the widget isn't running." To
+  recompute after any monitor/scale change:
+  ```bash
+  hyprctl monitors -j | python3 -c "import json,sys; m=json.load(sys.stdin)[0]; print(m['width']/m['scale'], m['height']/m['scale'])"
+  # then: x = logical_width - widget_width - margin, same for y
+  ```
+- **`exec-once` only fires at Hyprland startup**, not on `hyprctl reload` —
+  after adding the autostart line, log out and back in (or just run
+  `./run.sh &` once for the current session).
 - **No built-in global hotkey**, and none is attempted — hotkey libraries
   mostly can't hook keyboard input under Wayland's security model. Instead,
   Rory listens on a Unix socket at `$XDG_RUNTIME_DIR/rory.sock`; anything
@@ -309,6 +325,69 @@ option, or just close the window.
   (needs `socat`, already on this machine; any tool that can write a
   datagram to a Unix socket works — verified live with exactly this command).
 
+## Measured latency and cost per turn
+
+From `logs/trace.jsonl` over 8 real turns (mix of RAG, tool, and plain
+conversation) plus 5 real STT round trips, on 2026-08-27. Measured, not
+estimated — and deliberately **not** optimised.
+
+| stage | n | median | worst |
+|---|---|---|---|
+| `stt` (Sarvam Saaras) | 5 | 0.82s | 1.02s |
+| `llm_generate` (per call) | 14 | 0.95s | 1.34s |
+| `tool_dispatch` | 6 | 0.03s | 0.25s |
+| `tts` (Sarvam Bulbul v3) | 8 | 2.35s | 5.52s |
+| `turn_complete` (LLM+tools, excl. STT/TTS) | 8 | 1.99s | 2.10s |
+
+**End-to-end for a spoken turn** ≈ STT + turn_complete + TTS ≈ **4.2s median**.
+TTS dominates: it is the single largest stage and roughly half the wall clock.
+A tool-calling or RAG turn costs ~2 LLM round trips (14 calls / 8 turns =
+1.75 avg), which is why `turn_complete` is ~2x a single `llm_generate`.
+
+**Token cost per turn** (measured): ~1,818 prompt + ~44 completion tokens.
+At current Gemini 3.x Flash-Lite rates (~$0.25 / $1.50 per M in/out) that is
+**~$0.0005 per turn — about 0.05 cents**, or roughly $1 per 2,000 turns. On
+the free tier it is $0, subject to per-minute and per-day request caps.
+Sarvam TTS/STT bill against prepaid credits by character/duration
+(~116 characters of speech per turn median); check the Sarvam dashboard for
+your plan's rate.
+
+The single biggest cost lever already in place is the TTS cache — a repeated
+phrase costs nothing the second time.
+
+## Known limitations
+
+Honest list. These are accepted V1 tradeoffs, not bugs to be surprised by.
+
+- **The widget shows no transcript.** It renders only the artwork, so you
+  cannot see what Rory *heard* — a misheard name looks like a wrong answer
+  rather than a mis-transcription. The CLI prints `heard: ...` and remains
+  the better surface for diagnosing that. (An unspoken *answer* is not lost:
+  if TTS fails, the reply text appears on the widget — see below.)
+- **Bare single-name retrieval queries can miss.** "who is Marcel" scores
+  ~0.55 against a 0.58 threshold and returns nothing, while "what is my
+  dog's name" scores 0.75. Short, low-signal queries under-retrieve. The
+  threshold is calibrated so genuinely off-topic questions return nothing;
+  lowering it to catch these would trade a real safety property for a
+  convenience one.
+- **Latency is not optimised.** ~4.2s median for a spoken turn, dominated by
+  TTS. No streaming, no sentence-level pipelining — the whole reply is
+  synthesised before any audio plays.
+- **Conversation memory is a fixed 20-message window.** Older turns fall out
+  silently with no summarisation; a fact mentioned early in a long session
+  stops being "remembered" without any warning.
+- **STT has no local fallback.** Speech input requires `SARVAM_API_KEY` and
+  a working network; TTS degrades to espeak-ng offline, STT simply cannot run.
+- **Wayland positioning is compositor policy.** Rory cannot place or pin its
+  own window; that lives in `hyprland.conf` (see caveats above).
+- **Gemini occasionally emits tool-call syntax as plain text** rather than
+  through the structured API. The agent loop detects this against the real
+  tool names and makes the model retry, so it should never be spoken — but
+  the underlying model behaviour is non-deterministic and outside our control.
+- **No authentication, no sandboxing.** Anything that can write a datagram to
+  `$XDG_RUNTIME_DIR/rory.sock` can trigger listening. Fine for a single-user
+  desktop; not a multi-user design.
+
 ## Testing
 
 ```bash
@@ -316,6 +395,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests marked `live` hit the real Gemini API and are excluded from the default
-run (`pytest -m live` to run them).
+92 tests, all offline and free — no API keys needed. Tests marked `live` hit
+real APIs and are excluded from the default run (`pytest -m live` to include
+them). `tests/test_failure_modes.py` covers the failure matrix
+deterministically with `FakeLLM`.
 

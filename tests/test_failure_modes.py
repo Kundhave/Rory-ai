@@ -5,6 +5,10 @@ trace, never a fabricated success. The two anti-fabrication rules (unverified
 tool results, empty retrieval) get the most coverage because they are the
 ones where a wrong answer is indistinguishable from a right one.
 """
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import httpx
 import psutil
 import pytest
@@ -15,6 +19,15 @@ from rory.tools.registry import dispatch
 from rory.voice import tts as tts_module
 from rory.voice.stt import is_usable
 from tests.fakes import FakeLLM, calls, says
+
+
+@pytest.fixture(scope="module", autouse=True)
+def qapp():
+    # Constructing a QWidget without a QApplication segfaults rather than
+    # raising, so this must exist before any widget test runs.
+    from PySide6.QtWidgets import QApplication
+
+    yield QApplication.instance() or QApplication([])
 
 
 # --- STT returns empty or garbage -> no LLM call, prompt retry ---------------
@@ -278,6 +291,30 @@ def test_a_busy_microphone_names_the_device(monkeypatch):
         recorder.start()
 
     assert "HDA Intel PCH: ALC257 Analog" in str(excinfo.value)
+
+
+def test_the_widget_surfaces_the_answer_when_speech_fails_so_it_is_not_lost():
+    from rory.ui.widget import RoryStickyWidget, State
+
+    widget = RoryStickyWidget()
+
+    # Normal operation: artwork only, nothing rendered.
+    widget.set_state(State.SPEAKING, "")
+    assert widget._failure_panel.isHidden()
+
+    # The answer arrives but is deliberately not displayed yet...
+    widget.set_reply("Relay uses exponential backoff.")
+    assert widget._failure_panel.isHidden()
+
+    # ...until speech fails, at which point it is the only copy the user has.
+    widget.set_state(State.ERROR, "voice unavailable: network down")
+    shown = widget._failure_panel.text()
+    assert "Relay uses exponential backoff." in shown
+    assert "network down" in shown  # the real reason, not a generic message
+
+    # A new turn clears it again.
+    widget.set_state(State.LISTENING, "")
+    assert widget._failure_panel.isHidden()
 
 
 def test_a_microphone_failure_in_the_widget_becomes_an_error_state_not_a_crash():
