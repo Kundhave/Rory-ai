@@ -59,6 +59,11 @@ class State(Enum):
 # The status button's color per state. IDLE is the requested light pink;
 # PROCESSING stays pink too since the spinner (not a color change) is what
 # communicates "loading" — see _StatusButton.
+_FAILURE_PANEL_STYLE = (
+    "color: white; background: rgba(0, 0, 0, 200); padding: 6px; "
+    "border-radius: 6px; margin-top: 4px; font-size: 11px;"
+)
+
 _STATE_COLORS = {
     State.IDLE: "#f6a9c9",
     State.LISTENING: "#e74c3c",
@@ -347,9 +352,20 @@ class RoryStickyWidget(QWidget):
         self._status_button.raise_()
         self._status_button.clicked.connect(self.toggled)
 
+        # Normally the widget is artwork only. This panel is the single
+        # exception: if speech fails, the answer has nowhere else to go, so
+        # it appears rather than being lost. Hidden at all other times.
+        self._last_reply = ""
+        self._failure_panel = QLabel("")
+        self._failure_panel.setWordWrap(True)
+        self._failure_panel.setMaximumWidth(IMAGE_SIZE)
+        self._failure_panel.setStyleSheet(_FAILURE_PANEL_STYLE)
+        self._failure_panel.hide()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._image_frame, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self._failure_panel)
 
         self._position_default()
 
@@ -374,12 +390,26 @@ class RoryStickyWidget(QWidget):
         self.quit_requested.emit()
         event.accept()
 
+    def set_reply(self, text: str) -> None:
+        """Held, not shown. Only surfaces if speech then fails."""
+        self._last_reply = text
+
     def set_state(self, state: State, detail: str) -> None:
-        # detail (the actual error text, when there is one) still surfaces
-        # via the tooltip — not shown as always-visible text on the widget,
-        # per request, but not silently discarded either.
+        # detail (the actual error text, when there is one) surfaces via the
+        # tooltip — not as always-visible text on the widget, per request.
         self._status_button.set_state(state)
         self.setToolTip(state.value + (f": {detail}" if detail else ""))
+
+        if state is State.ERROR and self._last_reply:
+            # The answer exists but was never spoken. Showing it here is the
+            # only thing standing between a TTS failure and a lost answer.
+            self._failure_panel.setText(f"🔇 {detail}\n\n{self._last_reply}")
+            self._failure_panel.show()
+        else:
+            self._failure_panel.hide()
+        if state is State.LISTENING:
+            self._last_reply = ""  # new turn; the previous answer is spent
+        self.adjustSize()
 
 
 def bind_trigger_socket(on_trigger) -> tuple[socket.socket, QSocketNotifier]:
@@ -435,11 +465,12 @@ class RoryWidget(QObject):
         self.request_start.connect(self.worker.start_listening)
         self.request_stop.connect(self.worker.stop_and_process)
         self.worker.state_changed.connect(self._on_state_changed)
-        # transcript_ready/reply_ready are intentionally not connected to
-        # anything here — the widget shows state only (button color/icon +
-        # tooltip), not the transcript or reply text, per request. The
-        # worker still emits them regardless; nothing about VoiceWorker
-        # changed to accommodate this, only what the UI does with them.
+        # reply_ready is held, not displayed — the widget stays artwork-only
+        # in normal operation. It is shown only if TTS then fails, which is
+        # otherwise the one path where an answer would be lost entirely.
+        # transcript_ready stays unconnected: the transcript is recoverable
+        # by re-asking, an unspoken answer is not.
+        self.worker.reply_ready.connect(self.sticky.set_reply)
 
         self._trigger_socket, self._trigger_notifier = bind_trigger_socket(self.toggle)
 
