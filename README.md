@@ -64,7 +64,51 @@ V1 intentionally keeps the scope small. **Long-term memory, multiple personality
 
 ![Rory Architecture](assets/images/rory-architecture.svg)
 
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the component breakdown, and
+[docs/DECISIONS.md](docs/DECISIONS.md) for the reasoning behind non-obvious choices.
+
 ## Request Lifecycle
 
 ![Rory Request Lifecycle](assets/images/rory-request-lifecycle.svg)
+
+## Setup
+
+Requires Python 3.11+.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+Rory needs a Gemini API key:
+
+1. Get one at https://aistudio.google.com/apikey
+2. `cp .env.example .env`
+3. Put the key in `.env` as `GEMINI_API_KEY=...`
+
+Rory fails loudly at startup if `GEMINI_API_KEY` is missing — it will not run
+half-configured.
+
+## Running the CLI
+
+The CLI is the primary way to develop and exercise Rory's core — no audio
+hardware or desktop environment required.
+
+```bash
+python -m rory.cli
+```
+
+Type a message, get a reply, keep talking — it's a multi-turn conversation.
+Type `exit` or press Ctrl-D to quit.
+
+## Testing
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+Tests marked `live` hit the real Gemini API and are excluded from the default
+run (`pytest -m live` to run them).
 
