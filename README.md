@@ -93,23 +93,20 @@ V1 intentionally keeps the scope small. **Long-term memory, multiple personality
 | Tray, then persistent SVG widget (ADR-012, ADR-013) | Floating always-on-top window | Under Wayland a client cannot position or pin its own window. Building on that assumption would misbehave differently on every compositor. |
 | `bulbul:v3` plus retry before degrade (ADR-014) | Staying on `bulbul:v2` | Measured 2/5 success on v2 against 5/5 on v3. Detail in the problems section below. |
 
-Two of these are worth expanding because they are the ones an interviewer would
-push on.
 
-**Why no vector database.** I have used Qdrant in other projects, so this was a
-deliberate downgrade rather than ignorance. At 186 chunks, a vector DB buys
-approximate nearest neighbour speedup I do not need, plus a server process, a
-schema, and something that can be down. The entire storage layer is two NumPy
-arrays and a JSON sidecar. If brute force search ever shows up as slow in a
-trace, that is the trigger to revisit. Not before.
+Why NumPy instead of a vector database?
 
-**Why retrieval is a tool and not a pre-retrieval step.** The common RAG pattern
-embeds every incoming message and always injects top-K. That pays an embedding
-call and context cost on every turn regardless of relevance, and it locks the
-query to the user's exact phrasing. Making it a tool means the model decides
-when to look something up and phrases the query itself. The cost is that
-retrieval correctness now depends on the model's routing judgment, which the
-evaluation section shows is a real, measurable weakness.
+I considered using Qdrant, Chroma, or FAISS, but Rory's knowledge base currently has only 186 chunks. At that size, storing the embeddings in NumPy arrays and doing a brute-force cosine similarity search is fast enough and keeps the system simple.
+
+There is no database server, schema, or extra service to maintain — just a NumPy index and a JSON file for chunk metadata. If the knowledge base grows enough for retrieval to become a measurable bottleneck, that's when I'd introduce a vector database.
+
+Why is retrieval a tool?
+
+Instead of embedding and searching every user message, Rory exposes search_notes as a tool that the LLM can call when it needs personal context.
+
+This avoids paying the retrieval cost for messages like "thanks" or "open my terminal" and lets the model turn the user's request into a more useful search query.
+
+The tradeoff is that Rory has to decide when it needs to search. That's a real weakness — and one I actually measured during evaluation.
 
 ## RAG
 
