@@ -2,7 +2,7 @@
 
 ## What is Rory?
 
-> A character from my favorite show, Gilmore Girls. 
+> A character from my favorite TV show, Gilmore Girls. 
 #### (just kidding)
 
 ### Rory is voice first companion that knows about my goals, projects, half baked ideas, and the things I care about while helping me get things done on my desktop. 
