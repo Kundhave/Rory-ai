@@ -94,89 +94,42 @@ V1 intentionally keeps the scope small. **Long-term memory, multiple personality
 | `bulbul:v3` plus retry before degrade (ADR-014) | Staying on `bulbul:v2` | Measured 2/5 success on v2 against 5/5 on v3. Detail in the problems section below. |
 
 
-Why NumPy instead of a vector database?
-
-I considered using Qdrant, Chroma, or FAISS, but Rory's knowledge base currently has only 186 chunks. At that size, storing the embeddings in NumPy arrays and doing a brute-force cosine similarity search is fast enough and keeps the system simple.
-
-There is no database server, schema, or extra service to maintain — just a NumPy index and a JSON file for chunk metadata. If the knowledge base grows enough for retrieval to become a measurable bottleneck, that's when I'd introduce a vector database.
-
-Why is retrieval a tool?
-
-Instead of embedding and searching every user message, Rory exposes search_notes as a tool that the LLM can call when it needs personal context.
-
-This avoids paying the retrieval cost for messages like "thanks" or "open my terminal" and lets the model turn the user's request into a more useful search query.
-
-The tradeoff is that Rory has to decide when it needs to search. That's a real weakness — and one I actually measured during evaluation.
-
 ## RAG
 
-The pipeline, end to end:
+Rory's knowledge base is a set of Markdown files containing personal information about my projects, goals, ideas, and other context. The files are indexed once and queried only when Rory decides it needs them.
 
-```
-knowledge/*.md  (gitignored, personal)
-      ↓  python -m rory.rag.ingest
-split_into_sections()   header-aware, keeps the full heading breadcrumb
-      ↓
-chunk_section()         ~300 words, 45 word overlap, only if a section is long
-      ↓
-FastEmbedder.embed()    BAAI/bge-small-en-v1.5, 384 dims, local
-      ↓
-normalize()             L2, so search is a single matmul
-      ↓
-data/index.npz + data/chunks.json    both fully regenerable
+At runtime:
 
-query time:
-search_notes(query)   an ordinary @tool, same registry as the desktop tools
-      ↓
-embed, normalize, vectors @ query_vector, top 3, drop anything below MIN_SCORE
-      ↓
-{ok, results: [{source, heading, text, score}, ...]}   possibly empty
-```
+A few design decisions
 
-**Chunking is header aware, not a fixed character splitter.** `split_into_sections`
-walks the markdown line by line tracking a heading stack, so a chunk under a
-level-3 heading still carries its ancestors, for example
-`PROJECTS.md > 2. Relay > Core Architecture`. That breadcrumb is stored in the
-chunk metadata. Only sections longer than `CHUNK_WORDS` get split further, with
-`OVERLAP_WORDS` shared between consecutive pieces so a fact near a boundary
-survives whole in at least one chunk.
+Why NumPy instead of a vector database?
+The knowledge base currently contains only 186 chunks. At this scale, brute-force cosine search is effectively a single matrix multiplication and takes milliseconds. A vector database like Qdrant would add another service, configuration, and failure point without solving a problem I currently have.
 
-Chunk size is measured in words, not tokens. There is no tokenizer in this
-project's dependency list, and getting chunk size roughly right matters more
-than getting it exactly right.
+The index is therefore just a NumPy .npz file and a JSON metadata file. If retrieval ever becomes a measurable bottleneck, that's when I'd introduce a vector database.
 
-**`MIN_SCORE = 0.58` was measured, not guessed.** My first guess was 0.35, which
-was wrong in an instructive way. `bge-small`, like most sentence embedders, has a
-high anisotropic baseline: cosine similarity does not sit near zero for unrelated
-text. I probed real queries against the real index:
+Why header-aware chunking?
+The knowledge base is written in Markdown, so the headings already contain useful context. Rory preserves the heading hierarchy when creating chunks instead of blindly splitting text by character count.
 
-| query | top score |
-|---|---|
-| "what is the capital of france" | 0.485 |
-| "recommend me a good pizza recipe" | 0.526 |
-| "who won the cricket world cup" | 0.539 |
-| "what technologies do I use" | 0.716 |
-| "what does Relay use for retries" | 0.753 |
-| "tell me about the CUSTOS anomaly detection" | 0.864 |
+For example:
 
-Off-topic queries top out around 0.55. Genuinely relevant ones start around 0.65
-even when loosely phrased. 0.58 sits in that gap.
+That context is stored with the chunk and returned alongside the retrieved text.
 
-**Returning zero results is correct behaviour, not a bug.** This is the mechanism,
-not a prompt instruction, that lets Rory say "that is not in my notes" instead of
-answering from whatever scored highest. A prompt rule can be ignored. An empty
-list cannot be misread.
+Why is retrieval a tool?
+Rory does not search the knowledge base for every message. search_notes is a tool that Gemini can call when it needs specific personal information.
 
-**The profile card is not retrieved.** `agent/prompts.py::PROFILE_CARD` is a
-hand written ~150 token summary sent on every turn regardless of what retrieval
-does. Retrieval is precise but conditional, so a turn that never calls
-`search_notes` would otherwise carry zero personal context. Core identity should
-not depend on a retrieval hit. Everything more specific is left to the tool,
-which is what keeps the card small enough to afford every turn.
+This keeps normal conversations lightweight, while still allowing Rory to look up details when necessary.
 
-That design has a measured cost, documented in the evaluation section: the card
-sometimes tells the model it already knows enough, so it skips a lookup that
-would have produced a more precise answer.
+The tradeoff is that retrieval now depends on the model deciding to call the tool. This is one of the limitations I measured during evaluation.
+
+Why the 0.58 threshold?
+The threshold was calibrated against the actual knowledge base rather than chosen arbitrarily. Queries unrelated to my notes generally scored below 0.55, while relevant queries scored 0.65+. 0.58 provides a small gap between the two.
+
+If nothing passes the threshold, Rory returns an empty result instead of passing a weak match to the LLM. This gives the model an explicit signal that the information was not found in the knowledge base.
+
+The profile card is separate from RAG.
+Rory also receives a small, manually written profile card on every turn. It contains stable, high-level context that should not depend on retrieval.
+
+Specific or detailed information stays in the knowledge base and must be retrieved through search_notes.
 
 ## Memory
 
