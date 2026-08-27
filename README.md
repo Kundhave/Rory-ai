@@ -24,8 +24,8 @@
 - [Technology Stack](#technology-stack)
 - [Security](#security)
 - [Failure Handling](#failure-handling)
-- [Major Problems I Hit While Building This](#problems-i-hit-while-building-this)
-- [RAG vs Context Stuffing](#evaluation-does-rag-actually-help-at-this-scale)
+- [Major Problems I Hit While Building This](#Major-problems-i-hit-while-building-this)
+- [RAG vs. Context Stuffing](#RAG-vs.-Context-Stuffing)
 - [Measured Latency and Cost](#measured-latency-and-cost)
 - [Testing](#testing)
 - [Project Structure](#project-structure)
@@ -346,7 +346,7 @@ offline. I verified the fix by counting attempts.
 `tests/test_failure_modes.py` covers this table deterministically with `FakeLLM`,
 offline and free.
 
-## few Problems I Hit While Building This
+## Major Problems I Hit While Building This
 
 The parts that actually taught me something.
 
