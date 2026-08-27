@@ -45,10 +45,9 @@ The system follows a modular **STT → LLM → TTS** architecture, with RAG and 
 
 ## Why I Built Rory?
 
-I built Rory because I wanted a project that was **genuinely fun to use while forcing me to understand how AI agents actually work** - from voice pipelines and RAG to memory, tool calling, and system architecture.
+I built Rory because I wanted a project that was **genuinely fun to use while forcing me to understand how AI agents actually work**. 
 
 I wanted to build something I'd actually enjoy talking to and using every day. Eventually, I want to test if I can get Rory to have different personalities and modes depending on what I want - casual, brainstorming, motivation, rant, and more.
-
 Most importantly, Rory is a **learning project**, where every major engineering decision is intentional and something I should be able to explain.
 
 ## V1 Scope
@@ -71,78 +70,12 @@ V1 intentionally keeps the scope small. **Long-term memory, multiple personality
 
 ![Rory Architecture](assets/images/rory-architecture.svg)
 
-Rory is one Python process organised into three bands. Dependencies point downward only.
-
-```
-Adapters   cli.py, ui/widget.py, voice/*      audio + pixels
-              ↓  str in, Reply out
-Core       core.py, agent/*, llm.py,          pure text, no I/O devices
-           tools/*, rag/*
-              ↓  ═══ trust boundary ═══
-External   subprocess, psutil, cloud APIs,    side effects + network
-           knowledge/*.md, data/*
-```
-
-The load-bearing rule is that `RoryCore.handle_text(str) -> Reply` is the entire
-system. Everything else is an adapter over that one method.
-
-That single constraint is what makes the rest of the project tractable:
-
-- The CLI and the desktop widget are two adapters over the same core. Neither
-  contains conversation logic. Adding the widget in Feature 5 required zero
-  changes to `core.py`, `agent/`, `tools/`, or `rag/`, which I verified with
-  `git diff --stat` rather than assuming.
-- Voice never talks to the LLM. Speech becomes a `str` before it reaches
-  `handle_text`, and speech output starts from the `str` on `Reply.text`.
-- The core is testable without a microphone, a speaker, or a Qt event loop.
-  Every test in the default suite runs offline with no API keys.
-
-`Reply` is a plain dataclass with `turn_id`, `text`, and `error`. It contains no
-audio or UI concepts, which is what keeps the boundary honest.
-
-`handle_text` never raises. Any exception becomes `Reply(error=...)`. An adapter
-therefore always has something to display or speak, which is the foundation of
-the failure handling described later.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the component breakdown, and
-[docs/DECISIONS.md](docs/DECISIONS.md) for the reasoning behind non-obvious choices.
-
 ## Request Lifecycle
 
 ![Rory Request Lifecycle](assets/images/rory-request-lifecycle.svg)
 
-What actually happens when I click the widget and speak:
-
-1. **Click** toggles `LISTENING`. A `Recorder` opens an input stream at the
-   device's own native sample rate (44100 Hz on my laptop), not at 16 kHz.
-   Some ALSA devices reject arbitrary rates outright.
-2. **Click again**. Recording stops, the captured audio is resampled to 16 kHz
-   mono with numpy linear interpolation, and encoded to WAV bytes.
-3. **STT**. The WAV goes to Sarvam Saaras. If the transcript is empty or
-   whitespace only, the turn stops here and never reaches the LLM.
-4. **`RoryCore.handle_text(transcript)`** mints a `turn_id`, appends to history,
-   and enters the agent loop.
-5. **Agent loop**. Gemini gets the message history, the system prompt, and the
-   four tool schemas. If it returns tool calls, they are validated and dispatched
-   through the registry, results are appended to history, and the loop runs
-   again. Hard cap of 4 iterations.
-6. **TTS**. The final text is stripped of markdown, checked against the cache,
-   and synthesised. Then it plays.
-7. Back to `IDLE`.
-
-Steps 1, 2, 3, 6 and 7 are adapter work. Only step 4 and 5 are the core, and
-they behave identically whether the turn started as speech or as typed text.
-
-Every stage writes a JSONL line to `logs/trace.jsonl` with elapsed milliseconds,
-correlated by `turn_id`. That trace is what I used to diagnose most of the real
-problems in this project, and it logs metadata (lengths, token counts) rather
-than content by default, so a trace file is safe to read and share.
-`RORY_TRACE_VERBOSE=true` opts into full text when debugging.
 
 ## Architecture Decisions
-
-The full reasoning for each of these is in [docs/DECISIONS.md](docs/DECISIONS.md)
-as numbered ADRs. Summarised here, with what I rejected and why.
 
 | Decision | Rejected alternative | Why |
 |---|---|---|
