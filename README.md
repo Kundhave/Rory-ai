@@ -346,7 +346,7 @@ offline. I verified the fix by counting attempts.
 `tests/test_failure_modes.py` covers this table deterministically with `FakeLLM`,
 offline and free.
 
-## Problems I Hit While Building This
+## few Problems I Hit While Building This
 
 The parts that actually taught me something.
 
@@ -392,66 +392,9 @@ kept a retry as cheap insurance. Result: mean 11.13s to **2.06s**, max 15.68s to
 clever workaround (retry harder). I also added `last_engine` to the trace so
 "why does it sound bad" is answerable from a log line instead of guesswork. That
 ambiguity is why it took two rounds to find.
+.
 
-### 2. Rory read a function call out loud
-
-I asked about some friends and Rory literally spoke `default_api.search_notes(query=...)`.
-
-**Diagnosis.** The trace showed `tool_calls: []` for that turn, so no tool ran.
-The `default_api` prefix is Google's internal function-calling namespace, which
-told me the model had written its tool call as **plain text** instead of using
-the structured function-calling channel. `GeminiLLM.generate` only extracts tool
-calls from that structured channel, so this text was indistinguishable from a
-real answer and went straight to TTS.
-
-**Fix.** The agent loop now checks any tool-call-less response for call syntax
-matched against the actual registered tool names. If it matches, the response is
-never returned. Instead the loop spends one of its existing bounded iterations
-telling the model to either call the tool properly or answer plainly. If it keeps
-failing it hits the normal iteration cap.
-
-The detector matches `name(` rather than the bare word, so a real answer that
-mentions a tool name in prose is not falsely flagged. There is a test for exactly
-that.
-
-I could not reproduce it in 8 attempts afterwards, which is the honest position:
-the underlying model behaviour is non-deterministic. What is guaranteed is the
-catch, which is unit tested.
-
-### 3. A test that passed against broken code
-
-The status button crashed the whole widget. The cause was
-`QPen(QColor("white"), 3, cap=Qt.PenCapStyle.RoundCap)`, since PySide6's `QPen`
-constructor does not take a `cap` keyword.
-
-The interesting part is the test. I wrote one that called `repaint()` for every
-state, then verified it by deliberately reintroducing the bug. **It still passed.**
-Qt swallows exceptions raised inside a `paintEvent` override; it logs to stderr
-and does not propagate.
-
-So I extracted the drawing into a plain `_paint(painter)` method that `paintEvent`
-just calls, and pointed the test at that instead. Re-verified against the broken
-code: now it fails correctly.
-
-The lesson was not about `QPen`. It was that a test I had not verified against a
-known-bad input was worth very little.
-
-### 4. The widget was invisible and nothing was wrong
-
-The widget "wasn't showing up", but `hyprctl clients` reported it running,
-floating, pinned, at exactly the coordinates I had configured.
-
-**Diagnosis.** The monitor is 1920x1080 at `scale=1.25`. Hyprland positions
-windows in **logical** pixels, so the real usable space is 1536x864. My `move`
-was computed against the physical resolution, putting the widget off screen. I
-confirmed it by cross-referencing other windows: two tiled windows spanned to
-x≈1524, consistent with a 1536 wide space, not 1920.
-
-Two smaller things from the same session: `hyprctl reload` does not re-run
-`exec-once` (that only fires at compositor startup), and the current `windowrule`
-syntax needs an explicit value (`float 1`, not `float`).
-
-### 5. Retrieval that was technically working and practically useless
+### 2. Retrieval that was technically working and practically useless
 
 I added family details to my notes. "what is my mom's name" worked. "what is my
 dog's name" returned nothing, even though the answer was right there.
@@ -465,7 +408,7 @@ embedding was dominated by unrelated content.
 | query | before | after |
 |---|---|---|
 | "what is my dog's name" | 0.566 (miss) | **0.752** |
-| "tell me about my friends niranjana and mitali" | 0.667 | **0.814** |
+| "tell me about my friends" | 0.667 | **0.814** |
 
 That is why [knowledge/README.md](knowledge/README.md) insists on real markdown
 headings. The chunker
@@ -474,82 +417,27 @@ is header aware, so headings are not cosmetic, they are the primary signal.
 The residual limitation is real and I left it: bare single-name queries like "who
 is Marcel" still score ~0.55 and miss. Lowering the threshold to catch them would
 trade a genuine safety property for a convenience one.
+finished` signal.
 
-### 6. Quit did not work and the app froze
+### RAG vs. Context Stuffing
 
-Related to problem 1. When TTS hung, the whole app became unresponsive and Quit
-did nothing.
+*Results from 2026-08-26*
 
-Two causes. The TTS call was unbounded, so the worker thread could block forever.
-And `quit()` called `self._thread.wait()` on the **main thread**, which blocks the
-Qt event loop for as long as the worker's current slot takes. A stuck worker
-therefore froze the UI, which is what triggered the compositor's "not responding"
-warning.
-
-Fixed both: the TTS call runs under a hard ceiling so a turn always resolves to
-`IDLE` or `ERROR`, and `quit()` is now non-blocking via a `finished` signal.
-
-## Evaluation: does RAG actually help at this scale?
-
-`tests/golden.yaml` has hand-written questions against the real knowledge base:
-which tool should fire, which source document should show up in the top 3
-retrieved chunks, what the answer must or must not say. `rory/eval.py` runs them
-against the real Gemini API two ways:
-
-```bash
-python -m rory.eval             # RAG: search_notes retrieves on demand
-python -m rory.eval --stuff     # comparison: whole knowledge base pasted into the prompt
-```
-
-Both runs used `gemini-flash-lite-latest` against the real knowledge base, on
-2026-08-26, over the 20 cases that existed then. Whatever these numbers show is
-what is recorded here. This was not tuned after the fact.
-
-| | RAG (`search_notes`) | `--stuff` (whole KB in prompt) |
+| Metric | RAG | Context Stuffing |
 |---|---|---|
-| Golden cases passed | 16/20 | 19/20 |
-| Avg. prompt tokens/call | **960** | **12,088** (12.6x more) |
-| Calls per case | 1-2 | 1 |
-| Latency per case | 7-155s (free-tier retry backoff) | consistently ~7.5s |
+| Cases passed | 16/20 | 19/20 |
+| Avg. prompt tokens/call | 960 | 12,088 |
+| Calls per case | 1–2 | 1 |
 
-**RAG's 4 failures, and what they actually show:**
+At this size, stuffing performed slightly better because the entire knowledge base is always available to the model, so there is no retrieval or tool-routing step that can be missed.
 
-- Two (`reloop-competition`, `techtrendgpt-purpose`) are **routing** failures, not
-  retrieval failures. The always-present profile card already names those projects
-  with a one-line description, so the model judged it knew enough and never called
-  `search_notes`, then missed a specific fact that only lives in the full notes.
-  This is a direct, measured consequence of the profile-card design: it buys cheap
-  identity on every turn at the cost of sometimes short-circuiting a lookup.
-- One (`rag-projects`, "which of my projects use RAG?") is a genuine **retrieval**
-  miss. `search_notes` fired, but the top 3 chunks came from `ABOUT_ME.md` and
-  `IDEAS.md` rather than `PROJECTS.md`'s dedicated list. A real gap in ranking for
-  broad enumerative questions.
-- One (`engineering-specialization`) was a bug in the harness, not the system.
-  `expect_source` was written meaning "either source is acceptable" but the checker
-  required every listed source to appear. Fixed later to "any of", which is the
-  more useful semantic for recall@k anyway.
+RAG's main advantage was efficiency: it used **~92% fewer prompt tokens per call**. The failures also revealed some real limitations:
 
-**`--stuff`'s 1 failure** (`internship-comp-target`) had the entire knowledge base
-in context and still failed to extract one specific number. Stuffing does not make
-answers dependable either.
+- Some failures happened because the model decided not to call `search_notes` when the profile card already contained partial information.
+- One failure was a genuine retrieval miss on a broad question such as *"which of my projects use RAG?"*
+- The stuffing approach also failed on one question despite having the entire knowledge base in context.
 
-**Conclusion, honestly.** At this size (186 chunks, roughly 15K tokens of raw
-notes) stuffing scored marginally higher, because it structurally cannot have a
-routing failure. The content is simply already there.
-
-RAG's real measured win is cost: **about 92% fewer prompt tokens per call**. Its
-weakness is not retrieval quality, which held up in 15 of the 16 cases where the
-tool actually fired. The weakness is that routing correctness depends on the
-model deciding to call the tool at all, and the profile card can undercut exactly
-that for facts it partially covers.
-
-That tradeoff gets more favourable for RAG as the knowledge base grows past what
-fits comfortably in a context window. At the current scale both are cheap and
-fast, and the choice is really about future headroom versus today's pass rate.
-
-I am keeping RAG, and I think being able to say "stuffing beat it on this run,
-here is why, here is when that flips" is more useful than a number that flatters
-the architecture.
+**Verdict:** keeping RAG. At the current size, stuffing is competitive, but RAG gives the system much better headroom as the knowledge base grows.
 
 ## Measured Latency and Cost
 
